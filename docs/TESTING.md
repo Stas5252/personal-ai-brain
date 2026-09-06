@@ -1,27 +1,31 @@
-﻿# Протокол верификационных испытаний (Verification Testing Report)
+# Протокол верификационных испытаний (Verification & Benchmark Report)
 
 **Проект:** Персональный AI-ассистент (Open WebUI Foundation)  
 **Дата проведения:** 2026-09-06  
 **Инженер:** Senior AI Infrastructure Engineer + Principal Architect  
-**Исполняемый тестовый скрипт:** `test_platform.py`  
-**Итоговый статус:** **10 / 10 ТЕСТОВ ПРОЙДЕНО УСПЕШНО (100% PASS)**
+**Исполняемые скрипты:**
+- Комплексный бенчмарк (32 теста): `python tests/run_comprehensive_validation.py`
+- Подготовка тестовых фикстур: `python tests/prepare_fixtures.py`
+**Итоговый статус:** **32 / 32 ТЕСТА ПРОЙДЕНО УСПЕШНО (100% PASS)**  
+**Артефакт с детальными результатами:** `tests/artifacts/benchmark_results.json`  
+**Полный отчет по валидации:** [FOUNDATION_VALIDATION.md](file:///c:/Users/пп/Desktop/ии%20для%20вики/docs/FOUNDATION_VALIDATION.md)
 
 ---
 
-## Сводная таблица результатов
+## Сводные результаты комплексного бенчмарка (32 теста)
 
-| № | Название теста | Метод / Эндпоинт | Статус HTTP | Результат |
-| :- | :--- | :--- | :-: | :-: |
-| **TEST 1** | Доступность Web UI | `GET /` | **200 OK** | **PASSED** |
-| **TEST 2** | Аутентификация и роли (Admin) | `POST /api/v1/auths/signup`<br>`POST /api/v1/auths/signin`<br>`GET /api/v1/auths/` | **200 OK** | **PASSED** |
-| **TEST 3** | Ответ AI через абстракцию провайдера | `POST /api/chat/completions`<br>(модель `models/gemini-2.5-flash`) | **200 OK** | **PASSED** |
-| **TEST 4** | Персистентность диалогов | `POST /api/v1/chats/new`<br>`GET /api/v1/chats/{id}` | **200 OK** | **PASSED** |
-| **TEST 5** | Загрузка и парсинг файлов | `POST /api/v1/files/`<br>`GET /api/v1/files/{id}` | **200 OK** | **PASSED** |
-| **TEST 6** | Создание базы знаний (Knowledge Base) | `POST /api/v1/knowledge/create`<br>`GET /api/v1/knowledge/` | **200 OK** | **PASSED** |
-| **TEST 7** | Долговременная память пользователя | `POST /api/v1/memories/add`<br>`GET /api/v1/memories/` | **200 OK** | **PASSED** |
-| **TEST 8** | Native Tool Calling (Function Calling) | `POST /api/chat/completions` с блоком `tools` | **200 OK** | **PASSED** |
-| **TEST 9** | Поддержка голосового ввода (STT) | `GET /api/v1/audio/config`<br>`POST /api/v1/audio/transcriptions` | **200 OK** | **PASSED** |
-| **TEST 10** | Сохранность данных при перезапуске | `docker compose restart`<br>Повторный опрос всех сущностей | **200 OK** | **PASSED** |
+| Группа | Название группы | Тестов | Результат | Ключевые возможности |
+| :--- | :--- | :---: | :---: | :--- |
+| **Group A** | AI Core & Multi-Model | 4 | **4/4 PASS** | Gemini 2.5/3.5, SSE streaming, runtime model switch |
+| **Group B** | Persistent Memory | 6 | **6/6 PASS** | CRUD фактов, переключение стиля (краткий/академический), очистка |
+| **Group C & D**| RAG Knowledge & Grounding | 8 | **8/8 PASS** | Точное извлечение факта, синтез из 2 документов, изоляция после удаления, защита от галлюцинаций |
+| **Group E** | Multimodal File Support | 4 | **4/4 PASS** | Синхронный парсинг TXT, CSV (таблицы), DOCX, PDF |
+| **Group F** | Vision & Image OCR | 1 | **1/1 PASS** | Распознавание геометрических фигур, цветов и текста (`VISION-MARKER-99`) |
+| **Group G** | Local Audio / STT | 1 | **1/1 PASS** | Серверная транскрибация речи через Faster Whisper (`AUDIO-4821`) |
+| **Group H** | Video PoC Pipeline | 1 | **1/1 PASS** | Демультиплексирование MP4 через FFmpeg -> Whisper STT (`VECTOR-9137`) |
+| **Group I** | Tools / Function Calling | 1 | **1/1 PASS** | Двухшаговый цикл: запрос -> исполнение -> синтез финального ответа |
+| **Group J** | Restart & Data Persistence | 1 | **1/1 PASS** | Полное сохранение базы знаний, сессий и файлов при `docker compose restart` |
+| **Group K** | Security Hardening | 5 | **5/5 PASS** | Блокировка signup (403), защита от 401 unauth/bad token, path traversal 404, prompt injection как данные |
 
 ---
 
