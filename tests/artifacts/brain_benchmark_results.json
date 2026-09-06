@@ -1,0 +1,236 @@
+[
+  {
+    "test_id": "B_MEM_01",
+    "category": "Memory",
+    "name": "Сохранение факта через Admission Policy",
+    "latency_sec": 0.047,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "{'id': '16e5d705-58a8-4554-b873-598805f486ad', 'type': 'PROFILE', 'content': 'Пользователь — профессиональный портретный фотограф с опытом 7 лет.', 'i"
+  },
+  {
+    "test_id": "B_MEM_02",
+    "category": "Memory",
+    "name": "Взвешенный ретривал релевантной памяти",
+    "latency_sec": 0.002,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Пользователь — профессиональный портретный фотограф с опытом 7 лет."
+  },
+  {
+    "test_id": "B_MEM_03",
+    "category": "Memory",
+    "name": "Обновление существующего факта памяти",
+    "latency_sec": 0.01,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Рабочая камера: Sony A7IV с оптикой 85mm f1.4 GM."
+  },
+  {
+    "test_id": "B_MEM_04",
+    "category": "Memory",
+    "name": "Автоматическое разрешение конфликтов (Superseding)",
+    "latency_sec": 0.021,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Old marked SUPERSEDED, New active in retrieval: 9c59e283-012d-44c0-bb38-a806ffd0f200"
+  },
+  {
+    "test_id": "B_MEM_05",
+    "category": "Memory",
+    "name": "Удаление факта из памяти",
+    "latency_sec": 0.011,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "{'status': 'deleted', 'id': '65a88a5b-416e-4b35-9940-aa19037a3249'}"
+  },
+  {
+    "test_id": "B_MEM_06",
+    "category": "Memory",
+    "name": "Исключение нерелевантной памяти из выборки",
+    "latency_sec": 0.006,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Irrelevant feline memory excluded from technical aperture query"
+  },
+  {
+    "test_id": "B_PROF_07",
+    "category": "Profile",
+    "name": "Интерактивное интервью Onboarding (10 шагов)",
+    "latency_sec": 0.074,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Synthesized profile for Мария Ветрова / Студия Vetrova Visuals"
+  },
+  {
+    "test_id": "B_PROF_08",
+    "category": "Profile",
+    "name": "Чтение и верификация структурированного профиля",
+    "latency_sec": 0.004,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Мария Ветрова / Студия Vetrova Visuals"
+  },
+  {
+    "test_id": "B_KNOW_09",
+    "category": "Knowledge",
+    "name": "Индексация и ретривал слоя PROFESSIONAL",
+    "latency_sec": 0.005,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Схема Бабочка: источник света ставится прямо перед моделью и чуть выше уровня гл"
+  },
+  {
+    "test_id": "B_KNOW_10",
+    "category": "Knowledge",
+    "name": "Мультислойный ретривал (BUSINESS layer)",
+    "latency_sec": 0.005,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Пакет 'Премиум под ключ': включает 2.5 часа аренды студии, визажиста, 25 фото в "
+  },
+  {
+    "test_id": "B_KNOW_11",
+    "category": "Knowledge",
+    "name": "Трассировка источника знаний (Source Trace)",
+    "latency_sec": 0.001,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Source ID: b26adfdc-83bc-4af7-a08b-42356a261717, Layer: PROFESSIONAL"
+  },
+  {
+    "test_id": "B_KNOW_12",
+    "category": "Knowledge",
+    "name": "Защита от галлюцинаций и отказ на неизвестный факт",
+    "latency_sec": 0.001,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Verdict: unknown"
+  },
+  {
+    "test_id": "B_STYL_13",
+    "category": "Style",
+    "name": "Хранилище эталонных текстов (Exemplars Vault)",
+    "latency_sec": 0.004,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Пост: Съемка как терапия"
+  },
+  {
+    "test_id": "B_STYL_14",
+    "category": "Style",
+    "name": "Оценка текста по Style Benchmark (5 метрик)",
+    "latency_sec": 0.002,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Overall: 0.69, Notes: Avg sent len: 6.3 words; Emojis: 0; CTA: YES; Violations: 0"
+  },
+  {
+    "test_id": "B_STYL_15",
+    "category": "Style",
+    "name": "Обнаружение и штраф за запрещенные стоп-слова",
+    "latency_sec": 0.001,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Violations: 4, Score penalized to: 0.0"
+  },
+  {
+    "test_id": "B_ROUT_16",
+    "category": "Router",
+    "name": "Маршрутизация технического запроса PHOTO",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "PHOTO"
+  },
+  {
+    "test_id": "B_ROUT_17",
+    "category": "Router",
+    "name": "Маршрутизация сценарного запроса REELS/CONTENT",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "REELS"
+  },
+  {
+    "test_id": "B_ROUT_18",
+    "category": "Router",
+    "name": "Маршрутизация запроса продаж и ценообразования SALES",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "SALES"
+  },
+  {
+    "test_id": "B_ROUT_19",
+    "category": "Router",
+    "name": "Маршрутизация запроса по клиенту CLIENT",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "CLIENT"
+  },
+  {
+    "test_id": "B_ROUT_20",
+    "category": "Router",
+    "name": "Маршрутизация проектного запроса PROJECT",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "PROJECT"
+  },
+  {
+    "test_id": "B_CTX_21",
+    "category": "Context",
+    "name": "Взвешенное ранжирование элементов контекста",
+    "latency_sec": 0.0,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Top item score: 0.87"
+  },
+  {
+    "test_id": "B_CTX_22",
+    "category": "Context",
+    "name": "Изоляция и инжекция контекста проекта",
+    "latency_sec": 0.004,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "### АКТИВНЫЙ КОНТЕКСТ ПРОЕКТА 'Fashion Campaign 2026':\n- Статус: PLANNING\n- Опис"
+  },
+  {
+    "test_id": "B_CTX_23",
+    "category": "Context",
+    "name": "Изоляция и инжекция контекста клиента",
+    "latency_sec": 0.004,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "### АКТИВНЫЙ КОНТЕКСТ КЛИЕНТА 'Анна Смирнова':\n- Статус: LEAD\n- Интересующая усл"
+  },
+  {
+    "test_id": "B_SEC_24",
+    "category": "Security",
+    "name": "Защита от Prompt Injection в пользовательском вводе",
+    "latency_sec": 4.327,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Prompt override blocked; no system secrets revealed"
+  },
+  {
+    "test_id": "B_SEC_25",
+    "category": "Security",
+    "name": "Блокировка неавторизованного доступа к Brain API",
+    "latency_sec": 0.002,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "HTTP 401 Unauthorized"
+  },
+  {
+    "test_id": "B_OBS_26",
+    "category": "Observability",
+    "name": "Полная сквозная телеметрия запроса (Request Trace)",
+    "latency_sec": 5.259,
+    "status": "PASS",
+    "score": 1.0,
+    "evidence": "Request ID: 569dfb83-5614-4b53-8847-679ac2189189, Model: models/gemini-3.5-flash-lite, Latency: 5.25s"
+  }
+]
