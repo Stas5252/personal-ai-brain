@@ -87,9 +87,25 @@ class KnowledgeEngine:
             INSERT INTO knowledge_chunks (id, source_id, layer, content, metadata_json, created_at)
             VALUES (?, ?, ?, ?, ?, ?)
             """, (chunk.id, chunk.source_id, chunk.layer.value, chunk.content, meta.model_dump_json(), chunk.created_at))
+
+            # Sync FTS5
+            c.execute("""
+            INSERT INTO knowledge_chunks_fts (chunk_id, source_id, content, heading_path, sheet_name, layer)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (chunk.id, chunk.source_id, chunk.content, meta.title, "", chunk.layer.value))
             
         conn.commit()
         conn.close()
+
+        # Sync ChromaDB Vector Index
+        try:
+            from src.brain.knowledge.indexing.vector_index import ChromaVectorIndex
+            from src.brain.knowledge.embeddings.implementations import get_embedding_provider
+            v_index = ChromaVectorIndex(embedding_provider=get_embedding_provider())
+            v_index.upsert_chunks(chunks)
+        except Exception:
+            pass
+
         return meta, chunks
 
     def retrieve(
@@ -100,12 +116,28 @@ class KnowledgeEngine:
         client: Optional[str] = None,
         limit: int = 4
     ) -> List[Tuple[KnowledgeChunk, float, SourceTrace]]:
+        """
+        Executes hybrid vector + lexical search across all 6 layers.
+        Falls back to lexical matching if vector store is uninitialized.
+        """
+        try:
+            from src.brain.knowledge.indexing.hybrid_search import HybridSearchEngine
+            engine = HybridSearchEngine()
+            return engine.search(
+                query=query,
+                layer=layer,
+                project_id=project,
+                client_id=client,
+                top_k=limit
+            )
+        except Exception:
+            pass
+
+        # Robust lexical fallback
         conn = get_connection()
         c = conn.cursor()
-        
         sql = "SELECT * FROM knowledge_chunks WHERE 1=1"
         params = []
-        
         if layer:
             sql += " AND layer = ?"
             params.append(layer.value)
@@ -122,8 +154,6 @@ class KnowledgeEngine:
         
         for r in rows:
             meta = KnowledgeMetadata(**json.loads(r["metadata_json"]))
-            
-            # Optional project / client filtering
             if project and meta.project and meta.project != project:
                 continue
             if client and meta.client and meta.client != client:
@@ -131,13 +161,7 @@ class KnowledgeEngine:
                 
             chunk_words = set(re.findall(r"\w+", r["content"].lower()))
             common = query_words.intersection(chunk_words)
-            
-            if not common:
-                score = 0.0
-            else:
-                score = len(common) / max(len(query_words), 1)
-                
-            # Exact phrase boost
+            score = len(common) / max(len(query_words), 1) if common else 0.0
             if query.lower() in r["content"].lower():
                 score = max(score, 0.95)
                 
@@ -157,7 +181,12 @@ class KnowledgeEngine:
                     layer=chunk.layer,
                     chunk_id=chunk.id,
                     confidence=round(score, 2),
-                    snippet=chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content
+                    snippet=chunk.content[:100] + "..." if len(chunk.content) > 100 else chunk.content,
+                    page_number=meta.page_number,
+                    slide_number=meta.slide_number,
+                    sheet_name=meta.sheet_name,
+                    start_time=meta.start_time,
+                    end_time=meta.end_time
                 )
                 scored_chunks.append((chunk, score, trace))
                 

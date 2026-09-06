@@ -1,0 +1,431 @@
+[
+  {
+    "id": "q01",
+    "category": "document_lookup",
+    "query": "Найди договор на оказание фотоуслуг",
+    "expected_source": "sample_contract.pdf",
+    "expected_keywords": ["договор", "оказание", "фотоуслуг"],
+    "should_match": true
+  },
+  {
+    "id": "q02",
+    "category": "document_lookup",
+    "query": "Презентация портфолио 2026",
+    "expected_source": "sample_portfolio.pptx",
+    "expected_keywords": ["презентация", "портфолио"],
+    "should_match": true
+  },
+  {
+    "id": "q03",
+    "category": "document_lookup",
+    "query": "Руководство по студийному свету",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["руководство", "студийному", "свету"],
+    "should_match": true
+  },
+  {
+    "id": "q04",
+    "category": "document_lookup",
+    "query": "Прайс-лист на съемки и пакеты",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["пакеты", "съемок"],
+    "should_match": true
+  },
+  {
+    "id": "q05",
+    "category": "document_lookup",
+    "query": "Кассовый чек аренды оборудования в фотопрокате",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["чек", "фотопрокат"],
+    "should_match": true
+  },
+  {
+    "id": "q06",
+    "category": "document_lookup",
+    "query": "Осенний мудборд минимализм",
+    "expected_source": "sample_moodboard.jpg",
+    "expected_keywords": ["moodboard", "autumn", "minimalism"],
+    "should_match": true
+  },
+  {
+    "id": "q07",
+    "category": "specific_fact",
+    "query": "Какой размер предоплаты по договору на оказание фотоуслуг?",
+    "expected_source": "sample_contract.pdf",
+    "expected_keywords": ["30 000", "предоплата"],
+    "should_match": true
+  },
+  {
+    "id": "q08",
+    "category": "specific_fact",
+    "query": "В течение скольких дней отдаются готовые ретушированные фотографии по договору?",
+    "expected_source": "sample_contract.pdf",
+    "expected_keywords": ["14", "календарных"],
+    "should_match": true
+  },
+  {
+    "id": "q09",
+    "category": "specific_fact",
+    "query": "Сколько стоит аренда объектива Sony 85mm f/1.4 GM в чеке?",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["3 500", "sony 85mm"],
+    "should_match": true
+  },
+  {
+    "id": "q10",
+    "category": "specific_fact",
+    "query": "Какая полная стоимость услуг в договоре номер 104-Ф?",
+    "expected_source": "sample_contract.pdf",
+    "expected_keywords": ["85 000"],
+    "should_match": true
+  },
+  {
+    "id": "q11",
+    "category": "specific_fact",
+    "query": "За сколько часов при отмене съемки задаток не возвращается?",
+    "expected_source": "sample_contract.pdf",
+    "expected_keywords": ["48 часов", "не возвращается"],
+    "should_match": true
+  },
+  {
+    "id": "q12",
+    "category": "specific_fact",
+    "query": "Какая общая сумма чека фотопроката?",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["7 700"],
+    "should_match": true
+  },
+  {
+    "id": "q13",
+    "category": "cross_document",
+    "query": "Сравни стоимость свадебного дня из прайса и коммерческого съемочного дня из портфолио",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["110000", "свадебный"],
+    "should_match": true
+  },
+  {
+    "id": "q14",
+    "category": "cross_document",
+    "query": "Какое студийное оборудование упомянуто в чеке фотопроката?",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["profoto", "b10x"],
+    "should_match": true
+  },
+  {
+    "id": "q15",
+    "category": "cross_document",
+    "query": "Сколько стоит срочная отдача фотографий за 48 часов в прайсе?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["8000", "срочная отдача"],
+    "should_match": true
+  },
+  {
+    "id": "q16",
+    "category": "cross_document",
+    "query": "Какая сумма предоплаты указана в прайс-листе для свадьбы?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["30000", "свадебный"],
+    "should_match": true
+  },
+  {
+    "id": "q17",
+    "category": "cross_document",
+    "query": "Какая студийная техника из гайда по свету требует синхронизатора Profoto?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["profoto", "air remote"],
+    "should_match": true
+  },
+  {
+    "id": "q18",
+    "category": "cross_document",
+    "query": "Сравни цены индивидуального базового и индивидуального премиум пакетов",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["15000", "28000"],
+    "should_match": true
+  },
+  {
+    "id": "q19",
+    "category": "russian_semantic",
+    "query": "Как выставить приборы для светотеневого рисунка с треугольником на теневой стороне лица?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["рембрандт", "треугольник"],
+    "should_match": true
+  },
+  {
+    "id": "q20",
+    "category": "russian_semantic",
+    "query": "Какую насадку использовать для съемки женского бьюти-портрета с плавными тенями?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["октабокс", "бьюти-портрет"],
+    "should_match": true
+  },
+  {
+    "id": "q21",
+    "category": "russian_semantic",
+    "query": "Что лучше выбрать для контрастного фешн-макияжа и фактуры кожи?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["портретная тарелка", "beauty dish"],
+    "should_match": true
+  },
+  {
+    "id": "q22",
+    "category": "russian_semantic",
+    "query": "Какая насадка дает узкий световой пучок для контрового света и силуэтов?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["стрипбокс", "сотами"],
+    "should_match": true
+  },
+  {
+    "id": "q23",
+    "category": "russian_semantic",
+    "query": "Где должен стоять ключевой источник света относительно оси камеры?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["45 градусов", "выше уровня глаз"],
+    "should_match": true
+  },
+  {
+    "id": "q24",
+    "category": "russian_semantic",
+    "query": "Какие черные флаги рекомендуются в гайде по свету?",
+    "expected_source": "sample_guide.docx",
+    "expected_keywords": ["пенокартонные", "200x100"],
+    "should_match": true
+  },
+  {
+    "id": "q25",
+    "category": "video_timestamp",
+    "query": "В какой части видеоурока объясняется жесткий свет и соты?",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["жесткий свет", "соты"],
+    "expected_timestamp": "00:00 – 00:03",
+    "should_match": true
+  },
+  {
+    "id": "q26",
+    "category": "video_timestamp",
+    "query": "Где в видео показан пример границы светотени на модели?",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["граница", "светотени"],
+    "expected_timestamp": "00:03 – 00:06",
+    "should_match": true
+  },
+  {
+    "id": "q27",
+    "category": "video_timestamp",
+    "query": "Что написано на доске в первой части видеоурока?",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["урок 3", "жесткий свет"],
+    "should_match": true
+  },
+  {
+    "id": "q28",
+    "category": "video_timestamp",
+    "query": "В какой сцене видеоурока демонстрируется светотеневой рисунок?",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["светотеневого", "рисунка"],
+    "should_match": true
+  },
+  {
+    "id": "q29",
+    "category": "video_timestamp",
+    "query": "Как спикер объясняет работу рефлектора с сотами в видео?",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["рефлектора", "сотами"],
+    "should_match": true
+  },
+  {
+    "id": "q30",
+    "category": "video_timestamp",
+    "query": "Таймкод и титры демонстрации границы тени в видеоуроке",
+    "expected_source": "sample_lesson_ru.mp4",
+    "expected_keywords": ["граница тени"],
+    "expected_timestamp": "00:03 – 00:06",
+    "should_match": true
+  },
+  {
+    "id": "q31",
+    "category": "image_ocr",
+    "query": "Какие цвета входят в палитру осеннего мудборда?",
+    "expected_source": "sample_moodboard.jpg",
+    "expected_keywords": ["warm ochre", "graphite gray"],
+    "should_match": true
+  },
+  {
+    "id": "q32",
+    "category": "image_ocr",
+    "query": "Кто указан как ключевой визуальный референс в мудборде?",
+    "expected_source": "sample_moodboard.jpg",
+    "expected_keywords": ["peter lindbergh"],
+    "should_match": true
+  },
+  {
+    "id": "q33",
+    "category": "image_ocr",
+    "query": "Какая одежда и стилизация предлагается на осеннем мудборде?",
+    "expected_source": "sample_moodboard.jpg",
+    "expected_keywords": ["wool coats", "knitwear"],
+    "should_match": true
+  },
+  {
+    "id": "q34",
+    "category": "image_ocr",
+    "query": "Какой свет запланирован для съемки осеннего мудборда?",
+    "expected_source": "sample_moodboard.jpg",
+    "expected_keywords": ["diffused natural", "window light"],
+    "should_match": true
+  },
+  {
+    "id": "q35",
+    "category": "image_ocr",
+    "query": "Какой номер кассового чека из фотопроката?",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["8841"],
+    "should_match": true
+  },
+  {
+    "id": "q36",
+    "category": "image_ocr",
+    "query": "Какая дата и время указаны на чеке проката?",
+    "expected_source": "sample_scanned_receipt.pdf",
+    "expected_keywords": ["02.02.2026", "11:30"],
+    "should_match": true
+  },
+  {
+    "id": "q37",
+    "category": "table_lookup",
+    "query": "Сколько стоит ретушь дополнительного кадра из прайс-листа?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["500", "дополнительного кадра"],
+    "should_match": true
+  },
+  {
+    "id": "q38",
+    "category": "table_lookup",
+    "query": "Какова стоимость дополнительного часа съемки в таблице услуг?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["7000", "дополнительный час"],
+    "should_match": true
+  },
+  {
+    "id": "q39",
+    "category": "table_lookup",
+    "query": "Сколько фотографий с ретушью входит в пакет 'Индивидуальный премиум'?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["35", "премиум"],
+    "should_match": true
+  },
+  {
+    "id": "q40",
+    "category": "table_lookup",
+    "query": "Сколько стоит аренда пленочной камеры Leica в доп услугах?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["6000", "leica"],
+    "should_match": true
+  },
+  {
+    "id": "q41",
+    "category": "table_lookup",
+    "query": "Какова длительность пакета 'Контент для экспертов' и сколько в нем фото?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["3", "50", "контент для экспертов"],
+    "should_match": true
+  },
+  {
+    "id": "q42",
+    "category": "table_lookup",
+    "query": "Сколько стоит пакет 'Индивидуальный базовый'?",
+    "expected_source": "sample_pricing.xlsx",
+    "expected_keywords": ["15000", "базовый"],
+    "should_match": true
+  },
+  {
+    "id": "q43",
+    "category": "negative_refusal",
+    "query": "Какой пин-код от банковской карты фотографа?",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q44",
+    "category": "negative_refusal",
+    "query": "Сколько стоит аренда вертолета для свадебной съемки?",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q45",
+    "category": "negative_refusal",
+    "query": "Где лежат ключи от сейфа в фотостудии Альфа-99?",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q46",
+    "category": "negative_refusal",
+    "query": "Какой пароль от секретного Wi-Fi роутера на Тверской?",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q47",
+    "category": "negative_refusal",
+    "query": "Какая цена фотосессии на космическом корабле в прайс-листе?",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q48",
+    "category": "negative_refusal",
+    "query": "Серийный номер личного ядерного реактора фотографа",
+    "expected_source": null,
+    "should_match": false
+  },
+  {
+    "id": "q49",
+    "category": "conflicting_sources",
+    "query": "Входит ли аренда студии в стоимость коммерческих пакетов брендов из портфолио?",
+    "expected_source": "sample_portfolio.pptx",
+    "expected_keywords": ["не включена", "аренда студии"],
+    "should_match": true
+  },
+  {
+    "id": "q50",
+    "category": "conflicting_sources",
+    "query": "Какое время начала съемки согласовано в аудиосообщении?",
+    "expected_source": "sample_speech_ru.wav",
+    "expected_keywords": ["одиннадцать часов утра"],
+    "should_match": true
+  },
+  {
+    "id": "q51",
+    "category": "conflicting_sources",
+    "query": "В каком зале фотостудии будет проходить съемка по голосовому сообщению?",
+    "expected_source": "sample_speech_ru.wav",
+    "expected_keywords": ["циклорама"],
+    "should_match": true
+  },
+  {
+    "id": "q52",
+    "category": "conflicting_sources",
+    "query": "На какой день недели назначен тайминг съемки в аудио?",
+    "expected_source": "sample_speech_ru.wav",
+    "expected_keywords": ["пятницу"],
+    "should_match": true
+  },
+  {
+    "id": "q53",
+    "category": "conflicting_sources",
+    "query": "Входит ли оплата работы визажиста в коммерческие пакеты из слайдов?",
+    "expected_source": "sample_portfolio.pptx",
+    "expected_keywords": ["не включена", "визажиста"],
+    "should_match": true
+  },
+  {
+    "id": "q54",
+    "category": "conflicting_sources",
+    "query": "Сколько часов длится полный съемочный день в пакете для брендов?",
+    "expected_source": "sample_portfolio.pptx",
+    "expected_keywords": ["8 часов", "120 000"],
+    "should_match": true
+  }
+]

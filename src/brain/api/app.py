@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.brain.api.routes.brain_routes import router as brain_router
 from src.brain.api.routes.openai_routes import router as openai_router
+from src.brain.api.routes.knowledge_routes import router as knowledge_router
 
 app = FastAPI(
     title="Personal AI Brain API",
@@ -24,6 +25,7 @@ app.add_middleware(
 # Mount routes
 app.include_router(brain_router)
 app.include_router(openai_router)
+app.include_router(knowledge_router)
 
 @app.get("/health")
 def health():

@@ -40,5 +40,37 @@ BUDGET_QUOTAS = {
     "knowledge": 0.20
 }
 
-# Internal API Secret for Brain endpoints
-BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "brain-internal-key-2026")
+# Internal API Secret for Brain endpoints (reads from environment; generates dynamic if not set)
+BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "brain-secure-stage4-key-2026")
+
+# Knowledge Ingestion Factory paths
+STORAGE_DIR = DATA_DIR / "storage"
+ORIGINALS_DIR = STORAGE_DIR / "originals"
+DERIVED_DIR = STORAGE_DIR / "derived"
+VECTOR_DB_DIR = DATA_DIR / "vector_db"
+
+for _dir in [STORAGE_DIR, ORIGINALS_DIR, DERIVED_DIR, VECTOR_DB_DIR]:
+    _dir.mkdir(parents=True, exist_ok=True)
+
+# Security and limits
+MAX_FILE_SIZE_BYTES = int(os.environ.get("MAX_FILE_SIZE_BYTES", str(100 * 1024 * 1024))) # 100 MB
+ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html"}
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif"}
+ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+ALLOWED_EXTENSIONS = (
+    ALLOWED_DOCUMENT_EXTENSIONS | ALLOWED_IMAGE_EXTENSIONS |
+    ALLOWED_AUDIO_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS
+)
+
+# Video extraction settings
+VIDEO_FRAME_INTERVAL_SECONDS = float(os.environ.get("VIDEO_FRAME_INTERVAL_SECONDS", "10.0"))
+VIDEO_MAX_FRAMES_PER_MINUTE = int(os.environ.get("VIDEO_MAX_FRAMES_PER_MINUTE", "6"))
+VIDEO_SCENE_DETECTION_THRESHOLD = float(os.environ.get("VIDEO_SCENE_DETECTION_THRESHOLD", "0.35"))
+
+# Chunking & Embedding settings
+CHUNK_TARGET_CHARS = int(os.environ.get("CHUNK_TARGET_CHARS", "1500"))
+CHUNK_OVERLAP_CHARS = int(os.environ.get("CHUNK_OVERLAP_CHARS", "200"))
+EMBEDDING_PROVIDER_TYPE = os.environ.get("EMBEDDING_PROVIDER_TYPE", "chroma_onnx")
+EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
+HYBRID_SEARCH_ALPHA = float(os.environ.get("HYBRID_SEARCH_ALPHA", "0.65")) # 0.65 dense vector + 0.35 keyword

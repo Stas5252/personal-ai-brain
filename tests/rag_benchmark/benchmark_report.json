@@ -1,0 +1,591 @@
+{
+  "timestamp": "2026-09-06 13:07:21",
+  "total_queries": 54,
+  "metrics": {
+    "top1_accuracy_pct": 89.58,
+    "top3_accuracy_pct": 91.67,
+    "refusal_precision_pct": 100.0,
+    "citation_traceability_pct": 93.75,
+    "average_latency_ms": 599.36
+  },
+  "category_breakdown": {
+    "document_lookup": {
+      "total": 6,
+      "correct": 6
+    },
+    "specific_fact": {
+      "total": 6,
+      "correct": 6
+    },
+    "cross_document": {
+      "total": 6,
+      "correct": 5
+    },
+    "russian_semantic": {
+      "total": 6,
+      "correct": 6
+    },
+    "video_timestamp": {
+      "total": 6,
+      "correct": 5
+    },
+    "image_ocr": {
+      "total": 6,
+      "correct": 4
+    },
+    "table_lookup": {
+      "total": 6,
+      "correct": 6
+    },
+    "negative_refusal": {
+      "total": 6,
+      "correct": 6
+    },
+    "conflicting_sources": {
+      "total": 6,
+      "correct": 6
+    }
+  },
+  "results": [
+    {
+      "id": "q01",
+      "category": "document_lookup",
+      "query": "Найди договор на оказание фотоуслуг",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 202.13,
+      "top1_score": 0.6771,
+      "top1_snippet": "## ДОГОВОР НА ОКАЗАНИЕ ФОТОУСЛУГ № 104 Ф\n\n## г. Москва, 15 января 2026 года\n\n1. "
+    },
+    {
+      "id": "q02",
+      "category": "document_lookup",
+      "query": "Презентация портфолио 2026",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 191.41,
+      "top1_score": 1.0,
+      "top1_snippet": "Слайд 1: Презентация Портфолио 2026\nАвтор: Анна Яровая\\nКоммерческая и портретна"
+    },
+    {
+      "id": "q03",
+      "category": "document_lookup",
+      "query": "Руководство по студийному свету",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 188.45,
+      "top1_score": 0.9136,
+      "top1_snippet": "## Руководство по студийному свету для портретной съемки\n\n## 1. Базовые световые"
+    },
+    {
+      "id": "q04",
+      "category": "document_lookup",
+      "query": "Прайс-лист на съемки и пакеты",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 185.49,
+      "top1_score": 0.606,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q05",
+      "category": "document_lookup",
+      "query": "Кассовый чек аренды оборудования в фотопрокате",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 191.61,
+      "top1_score": 0.7963,
+      "top1_snippet": "КАССОВЫЙ ЧЕК № 8841\nООО 'ФОТОПРОКАТ МОСКВА'\nАренда объектива Sony 85mm f/1.4 GM:"
+    },
+    {
+      "id": "q06",
+      "category": "document_lookup",
+      "query": "Осенний мудборд минимализм",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 188.53,
+      "top1_score": 0.7962,
+      "top1_snippet": "ВИЗУАЛЬНОЕ ОПИСАНИЕ КАДРА (AI-GENERATED):\nМудборд осенней фотосессии с образцами"
+    },
+    {
+      "id": "q07",
+      "category": "specific_fact",
+      "query": "Какой размер предоплаты по договору на оказание фотоуслуг?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 188.3,
+      "top1_score": 0.8514,
+      "top1_snippet": "## ДОГОВОР НА ОКАЗАНИЕ ФОТОУСЛУГ № 104 Ф\n\n## г. Москва, 15 января 2026 года\n\n1. "
+    },
+    {
+      "id": "q08",
+      "category": "specific_fact",
+      "query": "В течение скольких дней отдаются готовые ретушированные фотографии по договору?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 192.28,
+      "top1_score": 0.6765,
+      "top1_snippet": "## ДОГОВОР НА ОКАЗАНИЕ ФОТОУСЛУГ № 104 Ф\n\n## г. Москва, 15 января 2026 года\n\n1. "
+    },
+    {
+      "id": "q09",
+      "category": "specific_fact",
+      "query": "Сколько стоит аренда объектива Sony 85mm f/1.4 GM в чеке?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 181.1,
+      "top1_score": 1.0,
+      "top1_snippet": "КАССОВЫЙ ЧЕК № 8841\nООО 'ФОТОПРОКАТ МОСКВА'\nАренда объектива Sony 85mm f/1.4 GM:"
+    },
+    {
+      "id": "q10",
+      "category": "specific_fact",
+      "query": "Какая полная стоимость услуг в договоре номер 104-Ф?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 198.11,
+      "top1_score": 0.8044,
+      "top1_snippet": "## ДОГОВОР НА ОКАЗАНИЕ ФОТОУСЛУГ № 104 Ф\n\n## г. Москва, 15 января 2026 года\n\n1. "
+    },
+    {
+      "id": "q11",
+      "category": "specific_fact",
+      "query": "За сколько часов при отмене съемки задаток не возвращается?",
+      "status": "PASS (Top-1)",
+      "hits_count": 2,
+      "latency_ms": 217.32,
+      "top1_score": 0.6995,
+      "top1_snippet": "## ДОГОВОР НА ОКАЗАНИЕ ФОТОУСЛУГ № 104 Ф\n\n## г. Москва, 15 января 2026 года\n\n1. "
+    },
+    {
+      "id": "q12",
+      "category": "specific_fact",
+      "query": "Какая общая сумма чека фотопроката?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 203.61,
+      "top1_score": 0.5508,
+      "top1_snippet": "КАССОВЫЙ ЧЕК № 8841\nООО 'ФОТОПРОКАТ МОСКВА'\nАренда объектива Sony 85mm f/1.4 GM:"
+    },
+    {
+      "id": "q13",
+      "category": "cross_document",
+      "query": "Сравни стоимость свадебного дня из прайса и коммерческого съемочного дня из портфолио",
+      "status": "FAIL",
+      "hits_count": 2,
+      "latency_ms": 192.07,
+      "top1_score": 0.4499,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q14",
+      "category": "cross_document",
+      "query": "Какое студийное оборудование упомянуто в чеке фотопроката?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 192.84,
+      "top1_score": 0.6402,
+      "top1_snippet": "## Руководство по студийному свету для портретной съемки\n\n## 1. Базовые световые"
+    },
+    {
+      "id": "q15",
+      "category": "cross_document",
+      "query": "Сколько стоит срочная отдача фотографий за 48 часов в прайсе?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 678.65,
+      "top1_score": 0.5823,
+      "top1_snippet": "Лист 'Дополнительные услуги' (4 строк):\nЗапись 1: Услуга: Срочная отдача за 48 ч"
+    },
+    {
+      "id": "q16",
+      "category": "cross_document",
+      "query": "Какая сумма предоплаты указана в прайс-листе для свадьбы?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 758.31,
+      "top1_score": 0.6496,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q17",
+      "category": "cross_document",
+      "query": "Какая студийная техника из гайда по свету требует синхронизатора Profoto?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 820.61,
+      "top1_score": 0.5866,
+      "top1_snippet": "## Руководство по студийному свету для портретной съемки\n\n## 1. Базовые световые"
+    },
+    {
+      "id": "q18",
+      "category": "cross_document",
+      "query": "Сравни цены индивидуального базового и индивидуального премиум пакетов",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 909.86,
+      "top1_score": 0.8445,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q19",
+      "category": "russian_semantic",
+      "query": "Как выставить приборы для светотеневого рисунка с треугольником на теневой стороне лица?",
+      "status": "PASS (Top-3)",
+      "hits_count": 2,
+      "latency_ms": 769.07,
+      "top1_score": 0.7631,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q20",
+      "category": "russian_semantic",
+      "query": "Какую насадку использовать для съемки женского бьюти-портрета с плавными тенями?",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 964.3,
+      "top1_score": 0.776,
+      "top1_snippet": "Таблица 1:\nСтрока 1 -> (Насадка: Октабокс 120 см, Характер света: Мягкий рассеян"
+    },
+    {
+      "id": "q21",
+      "category": "russian_semantic",
+      "query": "Что лучше выбрать для контрастного фешн-макияжа и фактуры кожи?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 889.43,
+      "top1_score": 0.7622,
+      "top1_snippet": "Таблица 1:\nСтрока 1 -> (Насадка: Октабокс 120 см, Характер света: Мягкий рассеян"
+    },
+    {
+      "id": "q22",
+      "category": "russian_semantic",
+      "query": "Какая насадка дает узкий световой пучок для контрового света и силуэтов?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 1090.0,
+      "top1_score": 0.8367,
+      "top1_snippet": "Таблица 1:\nСтрока 1 -> (Насадка: Октабокс 120 см, Характер света: Мягкий рассеян"
+    },
+    {
+      "id": "q23",
+      "category": "russian_semantic",
+      "query": "Где должен стоять ключевой источник света относительно оси камеры?",
+      "status": "PASS (Top-1)",
+      "hits_count": 2,
+      "latency_ms": 927.9,
+      "top1_score": 0.8292,
+      "top1_snippet": "## Руководство по студийному свету для портретной съемки\n\n## 1. Базовые световые"
+    },
+    {
+      "id": "q24",
+      "category": "russian_semantic",
+      "query": "Какие черные флаги рекомендуются в гайде по свету?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 813.77,
+      "top1_score": 0.6378,
+      "top1_snippet": "## Руководство по студийному свету для портретной съемки\n\n## 1. Базовые световые"
+    },
+    {
+      "id": "q25",
+      "category": "video_timestamp",
+      "query": "В какой части видеоурока объясняется жесткий свет и соты?",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 718.5,
+      "top1_score": 0.7139,
+      "top1_snippet": "Видео [00:00 – 00:03]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q26",
+      "category": "video_timestamp",
+      "query": "Где в видео показан пример границы светотени на модели?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 654.0,
+      "top1_score": 0.9676,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q27",
+      "category": "video_timestamp",
+      "query": "Что написано на доске в первой части видеоурока?",
+      "status": "FAIL",
+      "hits_count": 0,
+      "latency_ms": 838.93,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q28",
+      "category": "video_timestamp",
+      "query": "В какой сцене видеоурока демонстрируется светотеневой рисунок?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 802.89,
+      "top1_score": 0.5084,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q29",
+      "category": "video_timestamp",
+      "query": "Как спикер объясняет работу рефлектора с сотами в видео?",
+      "status": "PASS (Top-1)",
+      "hits_count": 2,
+      "latency_ms": 875.92,
+      "top1_score": 0.8724,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q30",
+      "category": "video_timestamp",
+      "query": "Таймкод и титры демонстрации границы тени в видеоуроке",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 837.62,
+      "top1_score": 0.7544,
+      "top1_snippet": "Видео [00:03 – 00:06]\nРечь спикера: Привет всем! Сегодня мы разберем жесткий све"
+    },
+    {
+      "id": "q31",
+      "category": "image_ocr",
+      "query": "Какие цвета входят в палитру осеннего мудборда?",
+      "status": "FAIL",
+      "hits_count": 0,
+      "latency_ms": 813.31,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q32",
+      "category": "image_ocr",
+      "query": "Кто указан как ключевой визуальный референс в мудборде?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 764.15,
+      "top1_score": 0.651,
+      "top1_snippet": "ВИЗУАЛЬНОЕ ОПИСАНИЕ КАДРА (AI-GENERATED):\nМудборд осенней фотосессии с образцами"
+    },
+    {
+      "id": "q33",
+      "category": "image_ocr",
+      "query": "Какая одежда и стилизация предлагается на осеннем мудборде?",
+      "status": "FAIL",
+      "hits_count": 0,
+      "latency_ms": 604.35,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q34",
+      "category": "image_ocr",
+      "query": "Какой свет запланирован для съемки осеннего мудборда?",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 948.46,
+      "top1_score": 0.5883,
+      "top1_snippet": "ВИЗУАЛЬНОЕ ОПИСАНИЕ КАДРА (AI-GENERATED):\nМудборд осенней фотосессии с образцами"
+    },
+    {
+      "id": "q35",
+      "category": "image_ocr",
+      "query": "Какой номер кассового чека из фотопроката?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 912.42,
+      "top1_score": 0.7707,
+      "top1_snippet": "КАССОВЫЙ ЧЕК № 8841\nООО 'ФОТОПРОКАТ МОСКВА'\nАренда объектива Sony 85mm f/1.4 GM:"
+    },
+    {
+      "id": "q36",
+      "category": "image_ocr",
+      "query": "Какая дата и время указаны на чеке проката?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 890.03,
+      "top1_score": 0.5469,
+      "top1_snippet": "КАССОВЫЙ ЧЕК № 8841\nООО 'ФОТОПРОКАТ МОСКВА'\nАренда объектива Sony 85mm f/1.4 GM:"
+    },
+    {
+      "id": "q37",
+      "category": "table_lookup",
+      "query": "Сколько стоит ретушь дополнительного кадра из прайс-листа?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 965.77,
+      "top1_score": 0.7587,
+      "top1_snippet": "Лист 'Дополнительные услуги' (4 строк):\nЗапись 1: Услуга: Срочная отдача за 48 ч"
+    },
+    {
+      "id": "q38",
+      "category": "table_lookup",
+      "query": "Какова стоимость дополнительного часа съемки в таблице услуг?",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 898.48,
+      "top1_score": 0.7002,
+      "top1_snippet": "Лист 'Дополнительные услуги' (4 строк):\nЗапись 1: Услуга: Срочная отдача за 48 ч"
+    },
+    {
+      "id": "q39",
+      "category": "table_lookup",
+      "query": "Сколько фотографий с ретушью входит в пакет 'Индивидуальный премиум'?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 935.86,
+      "top1_score": 0.7266,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q40",
+      "category": "table_lookup",
+      "query": "Сколько стоит аренда пленочной камеры Leica в доп услугах?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 1027.58,
+      "top1_score": 0.8188,
+      "top1_snippet": "Лист 'Дополнительные услуги' (4 строк):\nЗапись 1: Услуга: Срочная отдача за 48 ч"
+    },
+    {
+      "id": "q41",
+      "category": "table_lookup",
+      "query": "Какова длительность пакета 'Контент для экспертов' и сколько в нем фото?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 855.35,
+      "top1_score": 0.7062,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q42",
+      "category": "table_lookup",
+      "query": "Сколько стоит пакет 'Индивидуальный базовый'?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 769.22,
+      "top1_score": 0.7017,
+      "top1_snippet": "Лист 'Пакеты съемок' (4 строк):\nЗапись 1: Пакет: Индивидуальный базовый, Длитель"
+    },
+    {
+      "id": "q43",
+      "category": "negative_refusal",
+      "query": "Какой пин-код от банковской карты фотографа?",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 796.24,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q44",
+      "category": "negative_refusal",
+      "query": "Сколько стоит аренда вертолета для свадебной съемки?",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 840.92,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q45",
+      "category": "negative_refusal",
+      "query": "Где лежат ключи от сейфа в фотостудии Альфа-99?",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 687.59,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q46",
+      "category": "negative_refusal",
+      "query": "Какой пароль от секретного Wi-Fi роутера на Тверской?",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 1075.27,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q47",
+      "category": "negative_refusal",
+      "query": "Какая цена фотосессии на космическом корабле в прайс-листе?",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 895.57,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q48",
+      "category": "negative_refusal",
+      "query": "Серийный номер личного ядерного реактора фотографа",
+      "status": "PASS",
+      "hits_count": 0,
+      "latency_ms": 255.28,
+      "top1_score": 0.0,
+      "top1_snippet": ""
+    },
+    {
+      "id": "q49",
+      "category": "conflicting_sources",
+      "query": "Входит ли аренда студии в стоимость коммерческих пакетов брендов из портфолио?",
+      "status": "PASS (Top-1)",
+      "hits_count": 2,
+      "latency_ms": 288.43,
+      "top1_score": 0.8814,
+      "top1_snippet": "Слайд 2: Коммерческие пакеты для брендов\nСъемка лукбуков и кампейнов:\n• Полный с"
+    },
+    {
+      "id": "q50",
+      "category": "conflicting_sources",
+      "query": "Какое время начала съемки согласовано в аудиосообщении?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 197.5,
+      "top1_score": 0.4899,
+      "top1_snippet": "[00:02 – 00:04] съемка начнется ровно в одиннадцать часов утра в зале Циклорама."
+    },
+    {
+      "id": "q51",
+      "category": "conflicting_sources",
+      "query": "В каком зале фотостудии будет проходить съемка по голосовому сообщению?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 204.32,
+      "top1_score": 0.6718,
+      "top1_snippet": "[00:02 – 00:04] съемка начнется ровно в одиннадцать часов утра в зале Циклорама."
+    },
+    {
+      "id": "q52",
+      "category": "conflicting_sources",
+      "query": "На какой день недели назначен тайминг съемки в аудио?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 211.62,
+      "top1_score": 0.4733,
+      "top1_snippet": "[00:02 – 00:04] съемка начнется ровно в одиннадцать часов утра в зале Циклорама."
+    },
+    {
+      "id": "q53",
+      "category": "conflicting_sources",
+      "query": "Входит ли оплата работы визажиста в коммерческие пакеты из слайдов?",
+      "status": "PASS (Top-1)",
+      "hits_count": 1,
+      "latency_ms": 224.86,
+      "top1_score": 0.8389,
+      "top1_snippet": "Слайд 2: Коммерческие пакеты для брендов\nСъемка лукбуков и кампейнов:\n• Полный с"
+    },
+    {
+      "id": "q54",
+      "category": "conflicting_sources",
+      "query": "Сколько часов длится полный съемочный день в пакете для брендов?",
+      "status": "PASS (Top-1)",
+      "hits_count": 3,
+      "latency_ms": 239.61,
+      "top1_score": 0.8657,
+      "top1_snippet": "Слайд 2: Коммерческие пакеты для брендов\nСъемка лукбуков и кампейнов:\n• Полный с"
+    }
+  ]
+}

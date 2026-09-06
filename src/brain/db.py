@@ -65,9 +65,36 @@ def init_db():
         timestamp TEXT,
         confidence REAL,
         visual_description TEXT,
-        ocr_text TEXT
+        ocr_text TEXT,
+        original_filename TEXT,
+        mime_type TEXT,
+        file_size INTEGER DEFAULT 0,
+        sha256 TEXT,
+        p_hash TEXT,
+        storage_path TEXT,
+        derived_dir TEXT,
+        ingestion_status TEXT DEFAULT 'COMPLETED',
+        processing_version TEXT DEFAULT 'v1.0',
+        classification_method TEXT DEFAULT 'rules',
+        seen_count INTEGER DEFAULT 1,
+        checkpoint_stage TEXT,
+        error_message TEXT,
+        metadata_json TEXT DEFAULT '{}'
     )
     """)
+    
+    # Safe schema migration for knowledge_sources if created earlier
+    c.execute("PRAGMA table_info(knowledge_sources)")
+    existing_cols = {r["name"] for r in c.fetchall()}
+    for col_name, col_type in [
+        ("original_filename", "TEXT"), ("mime_type", "TEXT"), ("file_size", "INTEGER DEFAULT 0"),
+        ("sha256", "TEXT"), ("p_hash", "TEXT"), ("storage_path", "TEXT"), ("derived_dir", "TEXT"),
+        ("ingestion_status", "TEXT DEFAULT 'COMPLETED'"), ("processing_version", "TEXT DEFAULT 'v1.0'"),
+        ("classification_method", "TEXT DEFAULT 'rules'"), ("seen_count", "INTEGER DEFAULT 1"),
+        ("checkpoint_stage", "TEXT"), ("error_message", "TEXT"), ("metadata_json", "TEXT DEFAULT '{}'")
+    ]:
+        if col_name not in existing_cols:
+            c.execute(f"ALTER TABLE knowledge_sources ADD COLUMN {col_name} {col_type}")
     
     c.execute("""
     CREATE TABLE IF NOT EXISTS knowledge_chunks (
@@ -77,7 +104,59 @@ def init_db():
         content TEXT NOT NULL,
         metadata_json TEXT NOT NULL,
         created_at TEXT NOT NULL,
+        content_type TEXT DEFAULT 'text',
+        page_number INTEGER,
+        slide_number INTEGER,
+        sheet_name TEXT,
+        start_time REAL,
+        end_time REAL,
+        heading_path TEXT,
+        language TEXT DEFAULT 'ru',
+        token_count INTEGER DEFAULT 0,
         FOREIGN KEY(source_id) REFERENCES knowledge_sources(source_id) ON DELETE CASCADE
+    )
+    """)
+
+    c.execute("PRAGMA table_info(knowledge_chunks)")
+    existing_chunk_cols = {r["name"] for r in c.fetchall()}
+    for col_name, col_type in [
+        ("content_type", "TEXT DEFAULT 'text'"), ("page_number", "INTEGER"),
+        ("slide_number", "INTEGER"), ("sheet_name", "TEXT"), ("start_time", "REAL"),
+        ("end_time", "REAL"), ("heading_path", "TEXT"), ("language", "TEXT DEFAULT 'ru'"),
+        ("token_count", "INTEGER DEFAULT 0")
+    ]:
+        if col_name not in existing_chunk_cols:
+            c.execute(f"ALTER TABLE knowledge_chunks ADD COLUMN {col_name} {col_type}")
+
+    # 3.1 Ingestion Jobs Queue
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS ingestion_jobs (
+        job_id TEXT PRIMARY KEY,
+        source_id TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority INTEGER NOT NULL DEFAULT 10,
+        stage TEXT NOT NULL DEFAULT 'DISCOVERED',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        max_attempts INTEGER NOT NULL DEFAULT 3,
+        next_retry_at TEXT,
+        progress REAL NOT NULL DEFAULT 0.0,
+        checkpoint_stage TEXT,
+        error_message TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(source_id) REFERENCES knowledge_sources(source_id) ON DELETE CASCADE
+    )
+    """)
+
+    # 3.2 FTS5 Full-Text Search Table
+    c.execute("""
+    CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_chunks_fts USING fts5(
+        chunk_id UNINDEXED,
+        source_id UNINDEXED,
+        content,
+        heading_path,
+        sheet_name,
+        layer UNINDEXED
     )
     """)
     
