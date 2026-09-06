@@ -1,0 +1,26 @@
+﻿name: personal-ai
+
+services:
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:0.11.3
+    container_name: open-webui
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8080}:8080"
+    environment:
+      - PORT=8080
+      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
+      - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
+      - WEBUI_NAME=${WEBUI_NAME:-Personal AI Studio}
+      - DEFAULT_MODELS=${DEFAULT_MODELS:-gemini-2.5-flash}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CHAT_COMPLETION_TIMEOUT=120
+    volumes:
+      - open-webui-data:/app/backend/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+volumes:
+  open-webui-data:
+    name: open-webui-data
