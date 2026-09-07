@@ -7,7 +7,7 @@ from pathlib import Path
 
 _REPOSITORY = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_REPOSITORY))
-_TEST_ROOT = tempfile.TemporaryDirectory(prefix='brain-tests-')
+_TEST_ROOT = tempfile.TemporaryDirectory(prefix='brain-tests-', ignore_cleanup_errors=True)
 _ROOT = Path(_TEST_ROOT.name)
 os.environ['ENV'] = 'test'
 os.environ['BRAIN_ENV'] = 'test'

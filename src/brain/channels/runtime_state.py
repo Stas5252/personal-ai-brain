@@ -2,6 +2,7 @@
 import json
 import sqlite3
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -34,8 +35,14 @@ class RuntimeState:
                     attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0);
             ''')
 
+    @contextmanager
     def connect(self):
-        return sqlite3.connect(self.path, timeout=15)
+        conn = sqlite3.connect(self.path, timeout=15)
+        try:
+            yield conn
+            conn.commit()
+        finally:
+            conn.close()
 
     def get(self, key, default=None):
         with self.connect() as db:

@@ -69,7 +69,7 @@ class RuntimeTests(unittest.TestCase):
     def test_existing_upload_allowed(self):
         file = self.root / 'image.jpg'
         file.write_bytes(b'fixture')
-        self.assertEqual(confined_file(file, self.root), file)
+        self.assertEqual(confined_file(file, self.root), file.resolve())
 
     def test_outside_file_rejected(self):
         with self.assertRaises(ValueError):
