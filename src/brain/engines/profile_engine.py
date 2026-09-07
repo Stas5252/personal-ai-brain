@@ -4,7 +4,7 @@ User Profile Engine and Onboarding Workflow for Personal AI Brain.
 import uuid
 import json
 from datetime import datetime, timezone
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, Dict, List, Tuple, Any
 from src.brain.db import get_connection
 from src.brain.models.profile import UserProfile, OnboardingQuestion, OnboardingSession
 
@@ -94,7 +94,6 @@ class ProfileEngine:
         if row:
             data = json.loads(row["data_json"])
             return UserProfile(**data)
-        # Default empty profile
         return UserProfile()
 
     def save_profile(self, profile: UserProfile) -> UserProfile:
@@ -133,16 +132,12 @@ class ProfileEngine:
         if not row:
             conn.close()
             raise ValueError(f"Onboarding session {session_id} not found")
-        
         step = row["step"]
         answers = json.loads(row["answers_json"])
-        
         current_q = ONBOARDING_QUESTIONS[step]
         answers[current_q.id] = answer_text.strip()
         next_step = step + 1
-        
         if next_step < len(ONBOARDING_QUESTIONS):
-            # Advance to next question
             c.execute("""
             UPDATE onboarding_sessions
             SET step = ?, answers_json = ?
@@ -156,7 +151,6 @@ class ProfileEngine:
                 "progress": f"{next_step}/{len(ONBOARDING_QUESTIONS)}"
             }
         else:
-            # Interview is complete! Synthesize profile
             c.execute("""
             UPDATE onboarding_sessions
             SET step = ?, answers_json = ?, completed = 1
@@ -164,7 +158,6 @@ class ProfileEngine:
             """, (next_step, json.dumps(answers, ensure_ascii=False), session_id))
             conn.commit()
             conn.close()
-            
             profile = self._build_profile_from_answers(answers)
             self.save_profile(profile)
             return {
@@ -174,7 +167,6 @@ class ProfileEngine:
             }
 
     def _build_profile_from_answers(self, answers: Dict[str, str]) -> UserProfile:
-        # Parse prices into dict if formatted as text
         raw_prices = answers.get("prices", "")
         prices_dict = {}
         for part in raw_prices.replace(";", "\n").split("\n"):
@@ -183,11 +175,7 @@ class ProfileEngine:
                 prices_dict[k.strip()] = v.strip()
             elif part.strip():
                 prices_dict[f"Пакет {len(prices_dict)+1}"] = part.strip()
-                
-        # Parse services
         services_list = [s.strip() for s in answers.get("services", "").replace(";", ",").split(",") if s.strip()]
-        
-        # Parse forbidden words/topics
         forbidden_raw = answers.get("forbidden", "")
         forbidden_words = []
         forbidden_topics = []
@@ -198,10 +186,7 @@ class ProfileEngine:
                     forbidden_topics.append(cleaned)
                 else:
                     forbidden_words.append(cleaned)
-                    
-        # Parse goals
         goals_list = [g.strip() for g in answers.get("goals", "").replace(";", ",").split(",") if g.strip()]
-
         return UserProfile(
             identity=answers.get("identity", ""),
             profession="Фотограф",
@@ -226,9 +211,7 @@ class ProfileEngine:
         )
 
     def parse_profile_from_freetext(self, text: str) -> UserProfile:
-        """
-        Parses free-form introduction text or voice transcript into a complete UserProfile via LLM.
-        """
+        """Parses a free-form introduction through the configured LLM."""
         from src.brain.services.llm_provider import LLMProvider
         llm = LLMProvider()
         prompt = (
@@ -251,9 +234,7 @@ class ProfileEngine:
         )
         try:
             status_code, resp_text, _, _ = llm.chat_completion(
-                [{"role": "user", "content": prompt}],
-                temperature=0.2
-            )
+                [{"role": "user", "content": prompt}], temperature=0.2)
             if status_code == 200:
                 clean = resp_text.strip()
                 if clean.startswith("```"):
@@ -282,4 +263,3 @@ class ProfileEngine:
         except Exception as e:
             print(f"[!] Error parsing profile from text: {e}")
         return self.get_profile()
-
