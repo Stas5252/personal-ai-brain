@@ -146,7 +146,10 @@ class GeminiVisionProvider(BaseVisionProvider):
                 "Authorization": f"Bearer {self.api_key}"
             }
 
-            models_to_try = [self.model_name, "models/gemini-3.5-flash", "models/gemini-3.5-flash-lite"]
+            models_to_try = [self.model_name]
+            for candidate in ["models/gemini-3.5-flash-lite", "models/gemini-3.5-flash", "models/gemini-2.5-flash"]:
+                if candidate not in models_to_try:
+                    models_to_try.append(candidate)
             last_err = ""
             import time
 
@@ -154,7 +157,7 @@ class GeminiVisionProvider(BaseVisionProvider):
                 payload["model"] = m
                 data_bytes = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 
-                for attempt in range(3):
+                for attempt in range(2):
                     req = urllib.request.Request(
                         url,
                         data=data_bytes,
@@ -162,7 +165,7 @@ class GeminiVisionProvider(BaseVisionProvider):
                         method="POST"
                     )
                     try:
-                        with urllib.request.urlopen(req, timeout=40) as resp:
+                        with urllib.request.urlopen(req, timeout=30) as resp:
                             data = json.loads(resp.read().decode("utf-8"))
                             content = data["choices"][0]["message"]["content"]
                             return VisionAnalysisResult(
@@ -176,8 +179,11 @@ class GeminiVisionProvider(BaseVisionProvider):
                     except urllib.error.HTTPError as e:
                         last_err = f"HTTP {e.code}: {e.read().decode('utf-8')[:120]}"
                         if e.code == 429:
-                            time.sleep(2.5 * (attempt + 1))
-                            continue
+                            if attempt == 0:
+                                time.sleep(1.0)
+                                continue
+                            else:
+                                break
                         else:
                             break
                     except Exception as e:

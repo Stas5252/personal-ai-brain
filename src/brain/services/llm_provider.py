@@ -71,10 +71,12 @@ class LLMProvider:
                     err_body = e.read().decode("utf-8")
                     last_err = f"HTTP {e.code} on {m}: {err_body[:150]}"
                     if e.code == 429:
-                        # Exponential backoff on rate limit
-                        sleep_time = 2.0 * (attempt + 1)
-                        time.sleep(sleep_time)
-                        continue
+                        # Rapid recovery on rate limit: retry once or switch to next model immediately
+                        if attempt == 0:
+                            time.sleep(1.0)
+                            continue
+                        else:
+                            break
                     else:
                         break
                 except Exception as e:

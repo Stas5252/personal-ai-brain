@@ -27,11 +27,13 @@ UPSTREAM_LLM_BASE_URL = os.environ.get(
 OPENAI_API_BASE_URL = os.environ.get("OPENAI_API_BASE_URL", "http://host.docker.internal:8000/v1")
 OPENWEBUI_BASE_URL = os.environ.get("OPENWEBUI_BASE_URL", "http://localhost:8080")
 
-DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "models/gemini-3.5-flash")
+DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "models/gemini-3.5-flash-lite")
 FALLBACK_MODELS = [
-    "models/gemini-3.5-flash",
     "models/gemini-3.5-flash-lite",
-    "models/gemini-2.5-flash"
+    "models/gemini-3.5-flash",
+    "models/gemini-2.5-flash",
+    "models/gemini-2.5-flash-lite",
+    "models/gemini-flash-latest"
 ]
 
 # Channel configurations

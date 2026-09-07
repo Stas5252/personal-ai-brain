@@ -237,6 +237,40 @@ class ProactiveEngine:
             suggested_action = "start_workflow:no_content_emergency"
             base_msg = "Привет! Заметил, что мы давно не выкладывали контент. Давай за 5 минут набросаем идею для легкого поста или сторис?"
 
+        if not nudge_type and use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                tone = profile.tone if profile and profile.tone else "Теплый напарник, заботливый, без спама"
+                niche = profile.niche if profile and profile.niche else "фотография"
+                prompt = (
+                    f"Ты — личный ИИ-напарник фотографа ({niche}). Твой тон: {tone}.\n"
+                    f"Произошло событие: '{recent_event}'.\n"
+                    "Определи, требуется ли проактивная поддержка, совет или напоминание фотографу.\n"
+                    "Если да, верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект (без markdown блоков):\n"
+                    '{\n'
+                    '  "nudge_type": "ТИП_СОБЫТИЯ",\n'
+                    '  "message": "короткое (1-2 предложения) искреннее сообщение в мессенджер с предложением конкретного действия",\n'
+                    '  "suggested_action": "рекомендуемое действие или название процесса"\n'
+                    '}\n'
+                    "Если проактивное вмешательство не требуется, верни {}\n"
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and parsed.get("message"):
+                        return {
+                            "type": parsed.get("nudge_type", "DYNAMIC_EVENT_NUDGE"),
+                            "message": parsed["message"],
+                            "suggested_action": parsed.get("suggested_action")
+                        }
+            except Exception:
+                pass
+
         if not nudge_type:
             return None
 

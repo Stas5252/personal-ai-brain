@@ -236,7 +236,35 @@ class WorkflowEngine:
         elif action == "draft":
             ce = ContentEngine()
             fmt = ce.build_format_prompt("post")
-            output = {"draft_prompt": fmt, "draft_text": f"Черновик поста готов на основе контекста {wf.name}"}
+            draft_text = ""
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                angles = ctx.get("mined_angles") or wf.results.get("generate_angles", {}).get("ideas", []) or []
+                selected_angle = angles[0] if angles else {"hook": "Секрет живого кадра", "theme": "Закулисье работы со светом"}
+                niche = profile.niche if profile and profile.niche else "авторская фотография"
+                tone = profile.tone if profile and profile.tone else "живой, экспертный"
+                prompt = (
+                    f"Ты — копирайтер фотографа ({niche}, тон: {tone}).\n"
+                    f"Напиши готовый к публикации пост на тему: {selected_angle.get('theme', 'Закулисье съёмки')}.\n"
+                    f"Хук: {selected_angle.get('hook', 'Что остаётся за кадром')}.\n"
+                    f"Формат:\n{fmt}\n"
+                    f"Напиши готовый живой текст поста от первого лица с абзацами и призывом к действию."
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    draft_text = text.strip()
+            except Exception:
+                pass
+            if not draft_text:
+                draft_text = (
+                    f"«Один кадр, который изменил всё»\n\n"
+                    f"Когда мы только начинали работу над проектом '{wf.name}', казалось, что свет не ложится как надо. "
+                    f"Но стоило убрать лишний отражатель и сместить акцент на геометрию силуэта — картинка ожила.\n\n"
+                    f"В фотографии главное — не заученные позы, а состояние героя и воздух в кадре.\n\n"
+                    f"А что для вас самое сложное на съемках — выбор образа или первые минуты перед камерой?"
+                )
+            output = {"draft_prompt": fmt, "draft_text": draft_text}
         elif action in ["concept", "visuals"]:
             se = ShootingEngine()
             theme = ctx.get("theme", "Индивидуальный портрет")
@@ -247,13 +275,76 @@ class WorkflowEngine:
             output = sa.evaluate_pricing_ladder(packages)
         elif action == "content":
             ce = ContentEngine()
-            output = {"post_template": ce.build_format_prompt("post")}
+            fmt = ce.build_format_prompt("post")
+            theme = ctx.get("theme", wf.name or "Осенний фотодень")
+            city = (profile and profile.city) or ctx.get("city", "")
+            city_str = f" в {city}" if city else ""
+            post_content = ""
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = f"Напиши живой анонсирующий пост для фотодня '{theme}'{city_str}. Формат:\n{fmt}\nЖивой слог без заезженных клише."
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    post_content = text.strip()
+            except Exception:
+                pass
+            if not post_content:
+                post_content = (
+                    f"Открываю запись на специальный фотодень «{theme}»{city_str}! 🍂\n\n"
+                    f"Мы подготовили авторскую цветовую гамму, идеальный студийный свет и бережную помощь с позированием на каждом шаге. "
+                    f"Все удачные кадры в цветокоррекции + 10 фото в журнальной ретуши уже через 5 дней.\n\n"
+                    f"Напишите мне в личные сообщения, чтобы выбрать удобный временной слот!"
+                )
+            output = {"post_template": fmt, "post_text": post_content}
         elif action == "stories":
             ce = ContentEngine()
-            output = {"stories_template": ce.build_format_prompt("stories")}
+            fmt = ce.build_format_prompt("stories")
+            theme = ctx.get("theme", wf.name or "Фотодень")
+            stories_content = ""
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = f"Напиши серию из 5 вовлекающих Stories для анонса '{theme}'. Формат:\n{fmt}"
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    stories_content = text.strip()
+            except Exception:
+                pass
+            if not stories_content:
+                stories_content = (
+                    f"Серия Stories для анонса «{theme}»:\n"
+                    f"1. [Интрига]: 'Давно хотела реализовать эту концепцию света и цвета...'\n"
+                    f"2. [Контекст]: Показываем бэкстейдж подбора референсов и фактур тканей.\n"
+                    f"3. [Кульминация]: 'Анонсирую специальный фотодень всего на один уикенд!'\n"
+                    f"4. [Польза и сервис]: Полная помощь с одеждой, комфортная атмосфера без спешки.\n"
+                    f"5. [CTA]: Интерактивное окошко 'Прислать условия и тайминг слотов в Direct'."
+                )
+            output = {"stories_template": fmt, "stories_content": stories_content}
         elif action == "reels":
             ce = ContentEngine()
-            output = {"reels_template": ce.build_format_prompt("reels")}
+            fmt = ce.build_format_prompt("reels")
+            theme = ctx.get("theme", wf.name or "Фотодень")
+            reels_content = ""
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = f"Напиши сценарий Reels для анонса фотодня '{theme}'. Формат:\n{fmt}"
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    reels_content = text.strip()
+            except Exception:
+                pass
+            if not reels_content:
+                reels_content = (
+                    f"Сценарий Reels «{theme}»:\n"
+                    f"1. ХУК (0-3 сек): 'Почему на одних фотосессиях скованно, а на других — легко?' (показываем контраст взглядов).\n"
+                    f"2. ВИЗУАЛЬНЫЙ РЯД: Смена планов под ритмичный джазовый бит, фотограф направляет модель с улыбкой.\n"
+                    f"3. ТЕКСТ НА ЭКРАНЕ: 'Секрет в атмосфере, где тебе разрешено быть собой'.\n"
+                    f"4. ГОЛОСОВОЙ ТЕКСТ: 'Я беру на себя свет, образ и каждую позу — вам остаётся только пить кофе и ловить момент'.\n"
+                    f"5. CTA: 'Свободные слоты на ближайший фотодень — по ссылке в профиле'."
+                )
+            output = {"reels_template": fmt, "reels_content": reels_content}
         elif action == "sales":
             sa = SalesEngine()
             output = {"dm_template": sa.generate_objection_response("дорого", profile=profile)}

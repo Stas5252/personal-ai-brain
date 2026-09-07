@@ -192,14 +192,15 @@ class ShootingEngine:
         """
         Generates a chronological, production-ready shot list for the shoot via LLM.
         """
-        if use_llm and concept:
+        effective_concept = concept or "Индивидуальная авторская портретная съёмка"
+        if use_llm:
             try:
                 import json
                 from src.brain.services.llm_provider import LLMProvider
                 llm = LLMProvider()
                 prompt = (
                     f"Ты — режиссер съемки и фотограф.\n"
-                    f"Составь хронологический шот-лист съемки на {duration_minutes} минут по концепции: '{concept}'.\n"
+                    f"Составь хронологический шот-лист съемки на {duration_minutes} минут по концепции: '{effective_concept}'.\n"
                     f"Верни ИСКЛЮЧИТЕЛЬНО JSON массив из 4 фаз съёмки:\n"
                     f"[\n"
                     f'  {{"timing": "00:00 - 00:15", "phase": "Адаптация", "plan": "крупный план", "action": "описание действия", "key_shots": ["кадр 1", "кадр 2"]}},\n'
