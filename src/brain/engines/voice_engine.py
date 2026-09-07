@@ -16,7 +16,7 @@ class VoiceEngine:
         self,
         transcript: str,
         profile: Optional[UserProfile] = None,
-        use_llm: bool = False
+        use_llm: bool = True
     ) -> Dict[str, Any]:
         """
         Deconstructs spoken stream-of-consciousness into structured business & content assets,
@@ -59,7 +59,7 @@ class VoiceEngine:
                     f"}}"
                 )
                 code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
-                if code == 200:
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
                     clean = text.strip()
                     if clean.startswith("```"):
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()

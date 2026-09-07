@@ -203,3 +203,95 @@ def test_yaishka_parity_08_feedback_learning(brain):
     memories_neg = brain.memory_engine.get_memories()
     neg_mem = [m for m in memories_neg if "Стилевой запрет" in m.content or "инфоцыган" in m.content]
     assert len(neg_mem) > 0
+
+def test_yaishka_parity_09_adaptive_onboarding(brain):
+    """
+    Yaishka Feature Parity: Adaptive 1-shot conversational onboarding.
+    Extracts identity, city, and niche from free-form text or voice note,
+    indexes into memory, and generates an empathetic partner welcome.
+    """
+    intro_text = "Меня зовут Анастасия Соколова, я фотограф из Москвы. Снимаю женский портрет и контент для брендов."
+    res = brain.profile_engine.extract_profile_from_freeform(intro_text)
+    
+    assert res is not None
+    prof = res["profile"]
+    assert "Анастасия" in prof.identity or "Соколова" in prof.identity
+    assert prof.city in ["Москва", "Москве"]
+    assert "портрет" in prof.niche.lower() or "контент" in prof.niche.lower() or len(prof.niche) > 0
+    assert "Анастасия" in res["friendly_summary"]
+    assert len(res["friendly_summary"]) > 50
+
+def test_yaishka_parity_10_dialogue_analysis_triad(brain):
+    """
+    Yaishka Feature Parity: Sales dialogue deep analysis with 3 response paths
+    (caring, value-focused, alternative) and anti-patterns.
+    """
+    se = brain.sales_engine
+    dialogue = (
+        "Клиент: Здравствуйте, сколько стоит съемка?\n"
+        "Я: Добрый день! 20 000 руб за 2 часа.\n"
+        "Клиент: Ого, это дорого, мы пока подумаем."
+    )
+    analysis = se.analyze_client_dialogue(dialogue, use_llm=False)
+    assert "detected_objections" in analysis
+    assert "дорого" in analysis["detected_objections"]
+    assert "what_client_really_means" in analysis
+    assert "response_options" in analysis
+    opts = analysis["response_options"]
+    assert "caring" in opts and "value_focused" in opts and "alternative" in opts
+    assert len(opts["caring"]) > 20
+    assert len(opts["value_focused"]) > 20
+    assert len(opts["alternative"]) > 20
+    assert "what_not_to_say" in analysis
+    assert len(analysis["what_not_to_say"]) > 10
+
+def test_yaishka_parity_11_shooting_visual_logic(brain):
+    """
+    Yaishka Feature Parity: Visual logic and complete shot list generation
+    with exact camera settings and lighting tips.
+    """
+    se = brain.shooting_engine
+    logic = se.build_visual_logic(
+        concept_title="Минималистичный женский портрет в лучах заката",
+        genre="Индивидуальный портрет",
+        mood="Теплый, кинематографичный",
+        use_llm=False
+    )
+    assert "color_palette" in logic
+    assert "light_scheme" in logic
+    assert len(logic["color_palette"]) >= 3
+    assert "location_guidance" in logic
+    assert "styling_and_wardrobe" in logic
+
+    shotlist = se.generate_shot_list(
+        duration_minutes=60,
+        concept="Минималистичный женский портрет",
+        use_llm=False
+    )
+    assert len(shotlist) >= 4
+    # Check that shots have timing, phase, plan, and key_shots
+    assert "phase" in shotlist[0]
+    assert "plan" in shotlist[0]
+    assert "key_shots" in shotlist[0]
+
+def test_yaishka_parity_12_voice_multi_format_derivatives(brain):
+    """
+    Yaishka Feature Parity: Voice note decomposition into multi-format content:
+    narrative post, 2 Reels scripts (with hook/visual/audio/CTA), and 5 Stories slides.
+    """
+    ve = brain.voice_engine
+    raw_voice = (
+        "Сегодня на съемке клиентка сначала жутко волновалась и говорила что она нефотогеничная. "
+        "Но мы включили музыку, начали с чашки кофе и движения, и через двадцать минут она просто раскрылась. "
+        "В итоге получилось сорок невероятных кадров, она чуть не расплакалась от восторга."
+    )
+    res = ve.process_voice_transcript(raw_voice, use_llm=False)
+    assert "derivative_post" in res
+    assert len(res["derivative_post"]) > 50
+    assert "derivative_reels" in res
+    assert len(res["derivative_reels"]) >= 2
+    r1 = res["derivative_reels"][0]
+    assert "hook" in r1 and "visual" in r1 and "cta" in r1
+    assert "derivative_stories" in res
+    assert len(res["derivative_stories"]) >= 5
+

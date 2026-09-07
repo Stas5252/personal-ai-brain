@@ -1,7 +1,8 @@
-﻿"""
+"""
 Verification Test Suite for Personal AI Assistant (Open WebUI)
 Executes all 10 Foundation Tests against http://localhost:8080.
 """
+import os
 import json
 import time
 import uuid

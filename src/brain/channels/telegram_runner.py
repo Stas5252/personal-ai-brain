@@ -13,13 +13,21 @@ from src.brain.channels.runtime_state import RuntimeState, owner_allowed, proces
 log = logging.getLogger(__name__)
 UPLOADS = DATA_DIR / 'uploads'
 ACTIONS = {
-    'Идеи Reels': 'Придумай 5 Reels под мою нишу: хук, кадры, текст, призыв к действию.',
-    'Ответ клиенту': 'Помоги ответить клиенту. Сначала попроси прислать его сообщение.',
-    'Подготовка съёмки': 'Помоги подготовить съёмку: уточни цель, место и ограничения.',
-    'Прайс': 'Разбери мой прайс. Если цен или состава пакетов нет, сначала запроси их.',
-    'План дня': 'Что мне сегодня делать? Не придумывай отсутствующих клиентов и съёмки.',
+    '🎬 Идеи Reels': 'Придумай 5 идей Reels под мою нишу: цепляющий хук в первые 3 секунды, визуальный ряд, текст на экране и CTA.',
+    '💬 Ответ клиенту': 'Помоги ответить клиенту на сообщение или возражение. Попроси прислать скриншот или текст переписки.',
+    '📸 Подготовка съёмки': 'Помоги подготовить концепцию съёмки: уточни жанр, идею, локацию, и предложи схему света и референсы.',
+    '✨ Мне нечего выложить': 'Мне кажется, что нечего выложить в блог. Предложи 3 свежих ракурса на основе моего опыта и съёмок.',
+    '🔍 Разбор фото': 'Разбери мою фотографию: свет, композиция, эмоция, цвет и 3 конкретных шага, как сделать кадр в 2 раза сильнее.',
+    '📅 План дня': 'Что мне сегодня делать? Собери 3 главных приоритета (съемки, клиенты, контент) без выдуманных событий.',
 }
-KEYBOARD = {'keyboard': [[{'text': text}] for text in ACTIONS], 'resize_keyboard': True}
+KEYBOARD = {
+    'keyboard': [
+        [{'text': '🎬 Идеи Reels'}, {'text': '💬 Ответ клиенту'}],
+        [{'text': '📸 Подготовка съёмки'}, {'text': '✨ Мне нечего выложить'}],
+        [{'text': '🔍 Разбор фото'}, {'text': '📅 План дня'}]
+    ],
+    'resize_keyboard': True
+}
 
 
 class TelegramHTTP:
@@ -75,18 +83,55 @@ class Bot:
         caption = message.get('caption', '').strip()
         session_key = f'onboarding:{self.owner}'
         profile = self.brain.profile_engine
+
         if text == '/start':
-            return 'Привет! Пришли задачу, фото или голосовое. /brief: знакомство; /profile: профиль; /cancel: выйти из брифа. История сохраняется между перезапусками.'
+            p = profile.get_profile()
+            if p.identity and p.niche:
+                return (
+                    f"Привет, {p.identity}! Я твой личный ИИ-маркетолог и напарник по фотобизнесу. 📸\n\n"
+                    f"Твой профиль: {p.niche} ({p.city or 'город не указан'}).\n"
+                    "Чем займемся сегодня? Выбирай кнопку внизу или просто наговори голосовое со съёмки!"
+                )
+            self.state.put(session_key, 'freeform')
+            return (
+                "Привет! Я твой личный ИИ-напарник и маркетолог для фотографов. 📸\n"
+                "Я помогаю с контентом (Reels, Stories, посты), продажами ('дорого', 'мы подумаем'), "
+                "подготовкой съёмок, мудбордами и разбором фотографий.\n\n"
+                "Давай быстро познакомимся, чтобы я говорил на языке твоего стиля и знал твоих клиентов.\n\n"
+                "Напиши или отправь голосовое обычным человеческим языком:\n"
+                "Как тебя зовут, в каком городе работаешь, какой жанр снимаешь (портреты, свадьбы, контент и т.д.), "
+                "какие сейчас цены и главная цель на ближайший сезон?\n\n"
+                "Например: «Я Алина, снимаю женский портрет в Москве, средний чек 15 000 ₽, хочу поднять цены до 25 000 ₽ и регулярно делать рилсы»."
+            )
+
         if text == '/cancel':
             self.state.put(session_key, None)
-            return 'Бриф остановлен. Начать новый: /brief.'
+            return 'Бриф остановлен. Начать заново: /brief. Посмотреть профиль: /profile.'
+
         if text == '/profile':
             p = profile.get_profile()
-            return f'Имя: {p.identity or "не указано"}\nГород: {p.city or "не указан"}\nНиша: {p.niche or "не указана"}\nТон: {p.tone or "не указан"}'
+            prices_str = ", ".join([f"{k}: {v}" for k, v in (p.prices or p.pricing or {}).items()]) or "не указан"
+            goals_str = ", ".join(p.goals) if p.goals else "не указаны"
+            return (
+                f"👤 Профиль фотографа:\n"
+                f"• Имя: {p.identity or 'не указано'}\n"
+                f"• Город: {p.city or 'не указан'}\n"
+                f"• Ниша: {p.niche or 'не указана'}\n"
+                f"• Жанры: {', '.join(p.genres) if p.genres else 'не указаны'}\n"
+                f"• Прайс: {prices_str}\n"
+                f"• Тон общения: {p.tone or 'Теплый'}\n"
+                f"• Цели: {goals_str}\n\n"
+                f"Обновить профиль: отправь новое голосовое или напиши /brief."
+            )
+
         if text == '/brief':
-            session, question = profile.start_onboarding()
-            self.state.put(session_key, session.session_id)
-            return question.question + '\nМожно ответить голосом. /cancel: отмена.'
+            self.state.put(session_key, 'freeform')
+            return (
+                "Давай обновим твои данные! Отправь голосовое или напиши текстом:\n"
+                "Кто ты, где и что снимаешь, текущие цены и над какой задачей сейчас работаешь?\n"
+                "/cancel — отмена."
+            )
+
         local = None
         try:
             voice = message.get('voice') or message.get('audio')
@@ -97,29 +142,44 @@ class Bot:
                 with tempfile.TemporaryDirectory(prefix='brain-voice-') as derived:
                     result = AudioExtractor().extract(local, str(uuid.uuid4()), Path(derived))
                 if not result.success or not result.raw_text.strip():
-                    return 'Не удалось распознать речь. Проверь запись и установку Whisper/FFmpeg. Ничего не сохранено в профиль.'
+                    return 'Не удалось распознать речь. Проверь запись звука и повтори сообщение.'
                 text = (caption + '\n' + result.raw_text).strip()
+
             session = self.state.get(session_key)
-            if session and text:
+            # Free-form adaptive onboarding (like Yaishka)
+            if session == 'freeform' and text:
+                res = profile.extract_profile_from_freeform(text)
+                if res.get('is_complete'):
+                    self.state.put(session_key, None)
+                    return res['friendly_summary']
+                else:
+                    return res['friendly_summary']
+
+            # Step-by-step onboarding fallback if uuid session
+            if session and session != 'freeform' and text:
                 result = profile.answer_onboarding(session, text)
                 if result.get('completed'):
                     self.state.put(session_key, None)
-                    return 'Профиль сохранён. Теперь пришли первую рабочую задачу.'
+                    return 'Профиль сохранён! Теперь пришли первую рабочую задачу.'
                 return result['next_question']['question']
+
             document = message.get('document') or message.get('video')
             if document:
                 from src.brain.knowledge.factory import KnowledgeIngestionFactory
                 filename = document.get('file_name') or ('video.mp4' if message.get('video') else 'document.bin')
                 local = self.api.download(document, Path(filename).suffix.lower())
                 source, chunks = KnowledgeIngestionFactory().ingest_file(local, title=filename)
-                return f'Материал добавлен: {filename}. Фрагментов: {len(chunks)}. Теперь можно задавать вопросы по нему.'
+                return f'Материал добавлен в базу знаний: {filename}. Обработано фрагментов: {len(chunks)}. Теперь я учитываю эти знания в ответах!'
+
             images = None
             if message.get('photo'):
                 local = self.api.download(message['photo'][-1], '.jpg')
                 images = [str(local)]
-                text = caption or 'Разбери фотографию: свет, композиция, цвет и конкретные улучшения.'
+                text = caption or 'Разбери эту фотографию по 5 аспектам: свет и тень, композиция и ракурс, поза и эмоция, цвет и скинтон, и 3 шага как сделать кадр в 2 раза сильнее.'
+
             if not text:
-                return 'Пришли текст, голосовое, фотографию или документ.'
+                return 'Пришли текст, голосовое сообщение, фотографию или обучающий документ.'
+
             query = ACTIONS.get(text, text)
             result = process_request(self.brain, query, UPLOADS, images=images,
                                      conversation_history=self.state.get(f'history:{self.owner}', []))

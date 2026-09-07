@@ -15,7 +15,7 @@ class ShootingEngine:
         concept_title: str,
         genre: str = "Индивидуальный портрет",
         mood: str = "Кинематографичный, сдержанный, глубокий",
-        use_llm: bool = False
+        use_llm: bool = True
     ) -> Dict[str, Any]:
         """
         Synthesizes visual logic for a photo shoot: light, color palette, location, styling, props.
@@ -56,7 +56,7 @@ class ShootingEngine:
                     f"}}"
                 )
                 code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
-                if code == 200:
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
                     clean = text.strip()
                     if clean.startswith("```"):
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -187,7 +187,7 @@ class ShootingEngine:
         self,
         duration_minutes: int = 60,
         concept: str = "",
-        use_llm: bool = False
+        use_llm: bool = True
     ) -> List[Dict[str, Any]]:
         """
         Generates a chronological, production-ready shot list for the shoot via LLM.
@@ -209,7 +209,7 @@ class ShootingEngine:
                     f"]"
                 )
                 code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
-                if code == 200:
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
                     clean = text.strip()
                     if clean.startswith("```"):
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -250,10 +250,43 @@ class ShootingEngine:
             }
         ]
 
-    def analyze_reference(self, reference_description: str) -> Dict[str, Any]:
+    def analyze_reference(self, reference_description: str, use_llm: bool = True) -> Dict[str, Any]:
         """
         Deconstructs a visual reference into actionable photographic parameters.
         """
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = (
+                    "Ты — арт-директор и мастер студийного света для фотографов.\n"
+                    f"Разбери визуальный референс или кадр:\n«««\n{reference_description}\n»»»\n\n"
+                    "Декомпозируй его на профессиональные параметры:\n"
+                    "1. Точная схема света (насадки, угол, рисующий/заполняющий/контровой).\n"
+                    "2. Оптика и композиция (фокусное расстояние, диафрагма, ракурс, крупность плана).\n"
+                    "3. Цветокоррекция и стилизация (оттенки, контраст, зерно, скинтон).\n"
+                    "4. Совет по повторению в реальных условиях (студия или выезд).\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    f'  "reference_summary": {json.dumps(reference_description, ensure_ascii=False)},\n'
+                    '  "light_analysis": "описание световой схемы",\n'
+                    '  "composition_and_optics": "описание оптики и кадрирования",\n'
+                    '  "color_grading": "описание работы с цветом",\n'
+                    '  "adaptation_tips": "как повторить этот кадр на съемке"\n'
+                    "}"
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.3)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "light_analysis" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
         r_lower = reference_description.lower().replace("ё", "е")
         
         # Analyze light
@@ -280,10 +313,37 @@ class ShootingEngine:
             "adaptation_tips": "Для повторения в обычной студии используйте один моноблок с октобоксом на стойке чуть выше уровня глаз модели под углом 45 градусов."
         }
 
-    def generate_client_prep_memo(self, client_name: str = "клиент") -> str:
+    def generate_client_prep_memo(
+        self,
+        client_name: str = "клиент",
+        genre: str = "съемка",
+        location: str = "студия",
+        use_llm: bool = True
+    ) -> str:
         """
-        Checklist memo sent to client 2 days prior to the shoot.
+        Personalized checklist memo sent to client 2 days prior to the shoot.
         """
+        if use_llm:
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = (
+                    f"Ты — опытный заботливый фотограф. Напиши памятку подготовки к съёмке для героя ({client_name}).\n"
+                    f"Формат: {genre}. Локация: {location}.\n\n"
+                    "Памятка должна снять стресс клиента и содержать 5 четких пунктов:\n"
+                    "1. Сон, вода, подготовка кожи\n"
+                    "2. Одежда и обувь (с чистой подошвой для студии или обувь под локацию, глажка)\n"
+                    "3. Белье (бесшовное телесное под светлое)\n"
+                    "4. Аксессуары и мелочи, создающие акценты\n"
+                    "5. Эмоциональный настрой и обещание мягкой поддержки на съемке.\n\n"
+                    "Тон: заботливый, поддерживающий, профессиональный. Без канцелярита."
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and len(text.strip()) > 80 and not text.strip().startswith("Тестовый ответ"):
+                    return text.strip()
+            except Exception:
+                pass
+
         return (
             f"Чек-лист подготовки к съёмке для {client_name}:\n\n"
             "1. СОН И ВОДА: Постарайтесь хорошо выспаться накануне и пить достаточно воды — это лучший естественный тон для кожи.\n"
@@ -292,3 +352,22 @@ class ShootingEngine:
             "4. АКСЕССУАРЫ: Возьмите 2-3 любимых акцента (серьги, часы, очки, жакет) — они помогут менять образы за минуту.\n"
             "5. НАСТРОЙ: Главное правило — расслабиться и получать удовольствие. Я буду рядом, подскажу каждую позу и движение!"
         )
+
+    def analyze_photo_with_critique(self, image_path: str, user_question: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Executes a 5-dimension master photo critique using Gemini Vision:
+        Light, Composition, Posing/Emotion, Color/Grading, and 3 steps to level up.
+        """
+        critique_prompt = (
+            "Ты — строгий, но вдохновляющий фотокритик и арт-директор фотошколы.\n"
+            "Разбери эту фотографию по 5 профессиональным аспектам:\n"
+            "1. СВЕТ И ТЕНЬ: направление, качество (жесткий/мягкий), светотеневой рисунок лица/объекта, провалы в тенях или пересветы.\n"
+            "2. КОМПОЗИЦИЯ И РАКУРС: кадрирование, правило третей/диагонали, воздух вокруг героя, точка съемки.\n"
+            "3. ПОЗИРОВАНИЕ И ЭМОЦИЯ: естественность модели, руки, плечи, искренность взгляда или зажатость.\n"
+            "4. ЦВЕТ И СКИНТОН: баланс белого, натуральность тона кожи, гармония палитры одежды и фона.\n"
+            "5. КАК СДЕЛАТЬ КАДР В 2 РАЗА СИЛЬНЕЕ: 3 конкретных практических шага для следующей съемки.\n"
+        )
+        if user_question:
+            critique_prompt += f"\nВопрос автора кадра: «{user_question}»\nОтветь на него с точки зрения профессионального фотобизнеса."
+
+        return self.critique_shot(image_path, prompt=critique_prompt)

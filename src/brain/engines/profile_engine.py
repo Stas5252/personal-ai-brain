@@ -212,26 +212,37 @@ class ProfileEngine:
 
     def parse_profile_from_freetext(self, text: str) -> UserProfile:
         """Parses a free-form introduction through the configured LLM."""
+        res = self.extract_profile_from_freeform(text)
+        return res["profile"]
+
+    def extract_profile_from_freeform(self, text: str) -> Dict[str, Any]:
+        """
+        Parses a free-form introduction or voice note into structured UserProfile via LLM,
+        identifies missing critical fields, indexes facts into memory, and generates
+        a warm, personal conversational response in the style of a dedicated photo-marketer.
+        """
         from src.brain.services.llm_provider import LLMProvider
         llm = LLMProvider()
         prompt = (
-            "Ты — персональный бизнес-ассистент фотографа. Фотограф рассказывает о себе, своей работе, ценах и стиле:\n"
+            "Ты — личный ИИ-напарник и маркетолог для фотографов (как в лучших школах фотобизнеса).\n"
+            "Фотограф рассказывает о себе, своём опыте, ценах, клиентах и целях:\n"
             f"«««\n{text}\n»»»\n\n"
             "Заполни карточку профиля фотографа на основе этого рассказа.\n"
             "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект (без markdown блоков ```json):\n"
             "{\n"
-            '  "identity": "Имя фотографа или название бренда/студии",\n'
-            '  "city": "Город работы",\n'
-            '  "niche": "Специализация (например: Свадебная фотография, Женский портрет, Контент)",\n'
+            '  "identity": "Имя фотографа или бренд (например: Алина Морозова)",\n'
+            '  "city": "Город (например: Москва, Санкт-Петербург, Ростов-на-Дону)",\n'
+            '  "niche": "Ключевая специализация (например: Женский портрет, Свадьбы, Семейная съемка, Контент)",\n'
             '  "genres": ["список жанров"],\n'
-            '  "services": ["список услуг/пакетов"],\n'
-            '  "pricing": {"Пакет 1": "цена", "Пакет 2": "цена"},\n'
-            '  "audience": "Портрет целевой аудитории (кто клиенты)",\n'
-            '  "tone": "Желаемый тон общения (например: теплый, дерзкий, экспертный)",\n'
-            '  "forbidden_words": ["стоп-слова и штампы, которые фотограф не переносит"],\n'
-            '  "goals": ["цели на сезон"]\n'
+            '  "services": ["список пакетов/услуг"],\n'
+            '  "pricing": {"Экспресс": "10000", "Стандарт": "20000"},\n'
+            '  "audience": "Кто целевая аудитория (например: девушки 25-35, эксперты, пары)",\n'
+            '  "tone": "Желаемый тон (например: теплый, заботливый, экспертный)",\n'
+            '  "forbidden_words": ["стоп-слова и раздражающие штампы"],\n'
+            '  "goals": ["цели: поднять чек, набрать заказов, упаковать рилс"]\n'
             "}"
         )
+        extracted_data = {}
         try:
             status_code, resp_text, _, _ = llm.chat_completion(
                 [{"role": "user", "content": prompt}], temperature=0.2)
@@ -239,27 +250,126 @@ class ProfileEngine:
                 clean = resp_text.strip()
                 if clean.startswith("```"):
                     clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                data = json.loads(clean)
-                current = self.get_profile()
-                updated = UserProfile(
-                    identity=data.get("identity") or current.identity,
-                    profession="Фотограф",
-                    city=data.get("city") or current.city,
-                    niche=data.get("niche") or current.niche,
-                    genres=data.get("genres") or current.genres,
-                    services=data.get("services") or current.services,
-                    prices=data.get("pricing") or current.prices,
-                    pricing=data.get("pricing") or current.pricing,
-                    audience=data.get("audience") or current.audience,
-                    clients=data.get("audience") or current.clients,
-                    goals=data.get("goals") or current.goals,
-                    business_stage="Действующий коммерческий фотограф",
-                    tone=data.get("tone") or current.tone,
-                    forbidden_words=data.get("forbidden_words") or current.forbidden_words,
-                    updated_at=datetime.now(timezone.utc).isoformat()
-                )
-                self.save_profile(updated)
-                return updated
+                extracted_data = json.loads(clean)
         except Exception as e:
-            print(f"[!] Error parsing profile from text: {e}")
-        return self.get_profile()
+            print(f"[!] Error extracting profile via LLM: {e}")
+
+        # Rule-based fallback extraction if LLM didn't return values (e.g. offline or test mode)
+        import re
+        if not extracted_data.get("identity"):
+            m_name = re.search(r"меня зовут\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+)?)", text, re.IGNORECASE)
+            if not m_name:
+                m_name = re.search(r"(?:\bя\s*[—–-]\s*|\bя\s+)([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)", text)
+            if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий"]:
+                extracted_data["identity"] = m_name.group(1).strip()
+        if not extracted_data.get("city"):
+            m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)", text)
+            if m_city:
+                c_val = m_city.group(1).strip()
+                c_low = c_val.lower()
+                if "москв" in c_low:
+                    extracted_data["city"] = "Москва"
+                elif "питер" in c_low or "петербург" in c_low:
+                    extracted_data["city"] = "Санкт-Петербург"
+                elif "самар" in c_low:
+                    extracted_data["city"] = "Самара"
+                elif "казан" in c_low:
+                    extracted_data["city"] = "Казань"
+                elif "новосибирск" in c_low:
+                    extracted_data["city"] = "Новосибирск"
+                elif "екатеринбург" in c_low:
+                    extracted_data["city"] = "Екатеринбург"
+                elif c_val.endswith("е") or c_val.endswith("ы"):
+                    extracted_data["city"] = c_val[:-1] + "а"
+                else:
+                    extracted_data["city"] = c_val
+        if not extracted_data.get("niche"):
+            m_niche = re.search(r"(?:снимаю|ниша|специализаци[яи]|фотографирую)\s+([^.,;\n]+)", text, re.IGNORECASE)
+            if m_niche:
+                extracted_data["niche"] = m_niche.group(1).strip()
+
+        current = self.get_profile()
+        updated = UserProfile(
+            identity=extracted_data.get("identity") or current.identity,
+            profession="Фотограф",
+            city=extracted_data.get("city") or current.city,
+            niche=extracted_data.get("niche") or current.niche,
+            genres=extracted_data.get("genres") or current.genres,
+            services=extracted_data.get("services") or current.services,
+            prices=extracted_data.get("pricing") or current.prices,
+            pricing=extracted_data.get("pricing") or current.pricing,
+            audience=extracted_data.get("audience") or current.audience,
+            clients=extracted_data.get("audience") or current.clients,
+            goals=extracted_data.get("goals") or current.goals,
+            business_stage="Действующий коммерческий фотограф",
+            tone=extracted_data.get("tone") or current.tone or "Теплый, поддерживающий, профессиональный",
+            forbidden_words=extracted_data.get("forbidden_words") or current.forbidden_words,
+            updated_at=datetime.now(timezone.utc).isoformat()
+        )
+        saved = self.save_profile(updated)
+
+        # Index recognized facts into persistent memory
+        try:
+            from src.brain.engines.memory_engine import MemoryEngine
+            from src.brain.models.memory import MemoryType
+            me = MemoryEngine()
+            if saved.identity:
+                me.add_memory(content=f"Фотографа зовут: {saved.identity}", memory_type=MemoryType.CORE_FACT, importance=1.0)
+            if saved.niche:
+                me.add_memory(content=f"Специализация и ниша: {saved.niche} в городе {saved.city or 'не указан'}", memory_type=MemoryType.CORE_FACT, importance=0.95)
+            if saved.goals:
+                me.add_memory(content=f"Цели фотографа: {', '.join(saved.goals)}", memory_type=MemoryType.GOAL, importance=0.9)
+        except Exception:
+            pass
+
+        # Check what critical info is still missing
+        missing = []
+        if not saved.identity:
+            missing.append("имя")
+        if not saved.niche:
+            missing.append("ниша/специализация")
+        if not saved.city:
+            missing.append("город")
+        if not saved.prices and not saved.pricing:
+            missing.append("цены / средний чек")
+
+        # Build friendly conversational summary
+        name_str = saved.identity or "коллега"
+        niche_str = saved.niche or "фотография"
+        city_str = f" в {saved.city}" if saved.city else ""
+        
+        if not missing or (saved.identity and saved.niche):
+            clarification = None
+            summary = (
+                f"Очень приятно познакомиться, {name_str}! 🤝\n\n"
+                f"Я всё запомнил:\n"
+                f"• Ниша: {niche_str}{city_str}\n"
+                f"• Стиль и тон: {saved.tone}\n"
+            )
+            if saved.prices:
+                price_lines = ", ".join([f"{k}: {v}" for k, v in list(saved.prices.items())[:3]])
+                summary += f"• Текущий прайс: {price_lines}\n"
+            if saved.goals:
+                summary += f"• Главные цели: {', '.join(saved.goals)}\n"
+            summary += (
+                "\nТеперь я твой карманный маркетолог. С чем помогу прямо сейчас?\n"
+                "🎬 Придумать цепляющие Reels или сценарий сторис\n"
+                "💬 Разобрать переписку с клиентом (например, если написали 'дорого' или 'мы подумаем')\n"
+                "🎨 Собрать мудборд или схему света для съёмки\n"
+                "🏷️ Оформить понятный прайс\n\n"
+                "Или просто наговори голосовым любую рабочую задачу обычным языком!"
+            )
+        else:
+            clarification = f"Подскажи ещё, в каком городе ты в основном работаешь и какая твоя ключевая специализация?"
+            summary = (
+                f"Привет, {name_str}! Начало положено. {clarification}"
+            )
+
+        return {
+            "profile": saved,
+            "extracted_data": extracted_data,
+            "missing_critical_fields": missing,
+            "friendly_summary": summary,
+            "next_clarifying_question": clarification,
+            "is_complete": len(missing) <= 1
+        }

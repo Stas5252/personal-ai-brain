@@ -30,7 +30,7 @@ class ContentEngine:
                                    recent_projects: Optional[List[Dict[str, Any]]] = None,
                                    current_season: str = "текущий сезон",
                                    memories: Optional[List[str]] = None,
-                                   use_llm: bool = False) -> List[Dict[str, Any]]:
+                                   use_llm: bool = True) -> List[Dict[str, Any]]:
         """Build three content angles without inventing availability or statistics."""
         if recent_projects is None:
             try:
@@ -57,9 +57,20 @@ class ContentEngine:
                 from src.brain.services.llm_provider import LLMProvider
                 project_context = "; ".join(f"{p.get('name')} ({p.get('status')})" for p in recent_projects) or "нет подтверждённых проектов"
                 memory_context = "; ".join(memories) or "нет подтверждённых заметок"
-                prompt = (f"Ты контент-стратег фотографа. Используй только данные контекста, не выдумывай цены, даты, слоты, статистику, отзывы или личный опыт. Если факта нет, напиши 'требует подтверждения'. Ниша: {niche}. Жанры: {genres}. Город: {city}. Сезон: {current_season}. Проекты: {project_context}. Заметки: {memory_context}. Верни JSON-массив из 3 объектов с полями angle, format, hook, theme, cta.")
+                prompt = (
+                    f"Ты контент-стратег и маркетолог для фотографов в стиле лучших методик продвижения.\n"
+                    f"Ситуация: фотографу кажется, что 'нечего выложить'.\n"
+                    f"Контекст: Ниша: {niche}. Жанры: {genres}. Город: {city}. Сезон: {current_season}.\n"
+                    f"Проекты: {project_context}. Заметки: {memory_context}.\n\n"
+                    f"Предложи 3 принципиально разных, живых и цепляющих угла подачи:\n"
+                    f"1. Сторителлинг / Личный опыт со съёмки\n"
+                    f"2. Закулисье / Экспертиза / Лайфхак для клиента\n"
+                    f"3. Мягкий оффер / Закрытие страха клиента перед съёмкой\n\n"
+                    f"Не выдумывай нереальные цифры и чужие отзывы.\n"
+                    f"Верни JSON-массив из 3 объектов с полями angle, format, hook, theme, cta."
+                )
                 code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
-                if code == 200:
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
                     clean = text.strip()
                     if clean.startswith("```"):
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
@@ -100,16 +111,73 @@ class ContentEngine:
         ]
 
     def build_content_sprint_plan(self, profile: Optional[UserProfile] = None,
-                                  days: int = 7, use_llm: bool = False) -> List[Dict[str, Any]]:
+                                  days: int = 4, use_llm: bool = True) -> List[Dict[str, Any]]:
+        """
+        Generates a tailored multi-day content sprint for the photographer.
+        Dynamically adapts to the requested number of days (1-31) and photographer's niche.
+        """
         if days <= 0 or days > 31:
             raise ValueError("days must be between 1 and 31")
         genres = ", ".join(profile.genres) if profile and profile.genres else "авторская фотография"
         city = profile.city if profile and profile.city else "вашем городе"
         service = profile.services[0] if profile and profile.services else "съёмки"
-        # Keep the existing 4 anchor formats, but never claim confirmed dates.
-        return [
-            {"day": "Понедельник", "rubric": "Сторителлинг", "topic": f"История одного кадра в жанре {genres}", "format": "Post"},
-            {"day": "Среда", "rubric": "Экспертиза", "topic": f"Что проверить в гардеробе для {genres}", "format": "Reels + Carousel"},
-            {"day": "Пятница", "rubric": "Кейс / Доверие", "topic": f"Подбор локации в {city}, на подтверждённом примере", "format": "Stories Series"},
-            {"day": "Воскресенье", "rubric": "Продажи", "topic": f"Актуальные условия на {service}, только после проверки прайса и календаря", "format": "Telegram / Post"},
+        niche = profile.niche if profile and profile.niche else "фотография"
+        tone = profile.tone if profile and profile.tone else "живой, экспертный, искренний"
+
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — контент-продюсер фотографа ({niche}, {genres}, город {city}, тон: {tone}).\n"
+                    f"Составь мощный контент-план ровно на {days} дней для социальных сетей (Reels, Stories, Telegram, Посты).\n"
+                    f"Рубрики должны гармонично чередоваться:\n"
+                    f"- Сторителлинг и личный опыт\n"
+                    f"- Экспертиза и помощь клиенту в подготовке\n"
+                    f"- Бэкстейдж и процесс съемки\n"
+                    f"- Кейсы и преодоление страхов ('не умею позировать', 'боюсь камеры')\n"
+                    f"- Мягкие продажи и анонс свободных дат\n\n"
+                    f"Верни ИСКЛЮЧИТЕЛЬНО валидный JSON массив ровно из {days} объектов:\n"
+                    f"[\n"
+                    f'  {{"day": "День 1", "rubric": "рубрика", "topic": "конкретная цепляющая тема", "format": "Reels / Post / Stories", "hook": "хук в первые 3 секунды", "cta": "призыв к действию"}}\n'
+                    f"]"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, list) and len(parsed) >= min(days, 3):
+                        return parsed[:days]
+            except Exception:
+                pass
+
+        # Fallback multi-day generator
+        rubric_rotation = [
+            {"rubric": "Сторителлинг", "topic_tpl": "История одного кадра в жанре {genres}", "format": "Post"},
+            {"rubric": "Экспертиза", "topic_tpl": "Что проверить в гардеробе для {genres}", "format": "Reels + Carousel"},
+            {"rubric": "Кейс / Доверие", "topic_tpl": "Подбор локации в {city}, на подтверждённом примере", "format": "Stories Series"},
+            {"rubric": "Продажи", "topic_tpl": "Актуальные условия на {service}, только после проверки прайса и календаря", "format": "Telegram / Post"},
+            {"rubric": "Закулисье", "topic_tpl": "Один секрет световой схемы для {genres}", "format": "Reels"},
+            {"rubric": "Анти-страх", "topic_tpl": "Что делать, если вы думаете, что не умеете позировать", "format": "Carousel Post"},
+            {"rubric": "Интерактив", "topic_tpl": "Голосование за лучший образ недели в Stories", "format": "Stories"},
         ]
+
+        result = []
+        if days == 4:
+            day_names = ["Понедельник", "Среда", "Пятница", "Воскресенье"]
+        else:
+            day_names = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]
+
+        for idx in range(days):
+            day_label = day_names[idx % len(day_names)] if days <= 7 else f"День {idx + 1}"
+            template = rubric_rotation[idx % len(rubric_rotation)]
+            topic = template["topic_tpl"].format(genres=genres, city=city, service=service)
+            result.append({
+                "day": day_label,
+                "rubric": template["rubric"],
+                "topic": topic,
+                "format": template["format"]
+            })
+        return result

@@ -30,7 +30,7 @@ class ProactiveEngine:
         clients: Optional[List[Client]] = None,
         tasks: Optional[List[Task]] = None,
         profile: Optional[UserProfile] = None,
-        use_llm: bool = False
+        use_llm: bool = True
     ) -> Dict[str, Any]:
         """
         Synthesizes Top-3 high-impact daily priorities for the photographer,
@@ -210,25 +210,61 @@ class ProactiveEngine:
     def evaluate_proactive_nudge(
         self,
         recent_event: str,
-        profile: Optional[UserProfile] = None
+        profile: Optional[UserProfile] = None,
+        use_llm: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
-        Generates context-aware proactivity (e.g. after a shoot or when content has paused).
+        Generates context-aware proactivity (e.g. after a shoot, client ghosting, or idle content pause).
         """
         if not self.enabled or self.is_quiet_hours():
             return None
 
         event_lower = recent_event.lower().replace("ё", "е")
+        nudge_type = None
+        suggested_action = None
+        base_msg = ""
+
         if "съемк" in event_lower or "прошла съемка" in event_lower:
-            return {
-                "type": "POST_SHOOT_FOLLOWUP",
-                "message": "У тебя вчера прошла съёмка! Хочешь, я помогу собрать быстрый пост с инсайтом или сценарий Reels из бекстейджа, пока впечатления свежие?",
-                "suggested_action": "start_workflow:no_content_emergency"
-            }
-        elif "пропал клиент" in event_lower or "не отвечает" in event_lower:
-            return {
-                "type": "CLIENT_GHOSTING_CARE",
-                "message": "Клиент не отвечает больше 24 часов. Подготовить короткое бережное сообщение, чтобы возобновить диалог без давления?",
-                "suggested_action": "start_workflow:client_chat_analysis"
-            }
-        return None
+            nudge_type = "POST_SHOOT_FOLLOWUP"
+            suggested_action = "start_workflow:no_content_emergency"
+            base_msg = "У тебя недавно прошла съёмка! Хочешь, помогу собрать живой пост с инсайтом или сценарий Reels из бекстейджа, пока впечатления свежие?"
+        elif "пропал клиент" in event_lower or "не отвечает" in event_lower or "молча" in event_lower:
+            nudge_type = "CLIENT_GHOSTING_CARE"
+            suggested_action = "start_workflow:client_chat_analysis"
+            base_msg = "Клиент молчит больше 24 часов. Подготовить короткое бережное сообщение, чтобы возобновить диалог без навязчивости?"
+        elif "давно не заходил" in event_lower or "пауз" in event_lower or "тишин" in event_lower:
+            nudge_type = "CONTENT_IDLE_REMINDER"
+            suggested_action = "start_workflow:no_content_emergency"
+            base_msg = "Привет! Заметил, что мы давно не выкладывали контент. Давай за 5 минут набросаем идею для легкого поста или сторис?"
+
+        if not nudge_type:
+            return None
+
+        if use_llm:
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                tone = profile.tone if profile and profile.tone else "Теплый напарник, заботливый, без спама"
+                niche = profile.niche if profile and profile.niche else "фотография"
+                prompt = (
+                    f"Ты — личный ИИ-напарник фотографа ({niche}). Твой тон: {tone}.\n"
+                    f"Событие: {recent_event}.\n"
+                    f"Напиши одно короткое (1-2 предложения), теплое, дружеское напоминание в Telegram.\n"
+                    f"Без формализма, навязчивости и роботизированных фраз. Сразу предложи полезное действие.\n"
+                    f"Верни ТОЛЬКО текст сообщения."
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and len(text.strip()) > 20 and not text.strip().startswith("Тестовый ответ"):
+                    return {
+                        "type": nudge_type,
+                        "message": text.strip().strip('"\''),
+                        "suggested_action": suggested_action
+                    }
+            except Exception:
+                pass
+
+        return {
+            "type": nudge_type,
+            "message": base_msg,
+            "suggested_action": suggested_action
+        }
