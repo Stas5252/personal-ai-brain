@@ -1,28 +1,26 @@
-"""
-Pytest configuration for Personal AI Brain.
-Ensures tests run against an isolated test database and NEVER pollute production data/brain.db.
-"""
+"""Isolate before test collection: imports can create databases and indexes."""
 import os
-import shutil
 import tempfile
-import pytest
 from pathlib import Path
 
-os.environ["ENV"] = "test"
-os.environ["BRAIN_ENV"] = "test"
+_TEST_ROOT = tempfile.TemporaryDirectory(prefix='brain-tests-')
+_ROOT = Path(_TEST_ROOT.name)
+os.environ['ENV'] = 'test'
+os.environ['BRAIN_ENV'] = 'test'
+os.environ['BRAIN_DB_PATH'] = str(_ROOT / 'brain.db')
+os.environ['BRAIN_API_KEY'] = 'regression-only-not-a-production-key-0001'
+os.environ['GEMINI_API_KEY'] = ''
+os.environ['TELEGRAM_BOT_TOKEN'] = ''
+os.environ['EMBEDDING_PROVIDER_TYPE'] = 'hash_fallback'
 
-@pytest.fixture(scope="session", autouse=True)
-def isolate_test_environment(tmp_path_factory):
-    temp_dir = tmp_path_factory.mktemp("test_brain_data")
-    test_db = temp_dir / "test_brain.db"
-    
-    prod_db = Path("data/brain.db")
-    if prod_db.exists():
-        shutil.copy(prod_db, test_db)
-        
-    os.environ["BRAIN_DB_PATH"] = str(test_db)
-    
-    import src.brain.config as cfg
-    cfg.DB_PATH = str(test_db)
-    
-    yield
+import src.brain.config as cfg
+cfg.DB_PATH = str(_ROOT / 'brain.db')
+cfg.DATA_DIR = _ROOT
+cfg.STORAGE_DIR = _ROOT / 'storage'
+cfg.ORIGINALS_DIR = cfg.STORAGE_DIR / 'originals'
+cfg.DERIVED_DIR = cfg.STORAGE_DIR / 'derived'
+cfg.VECTOR_DB_DIR = _ROOT / 'vectors'
+for path in (cfg.DATA_DIR, cfg.STORAGE_DIR, cfg.ORIGINALS_DIR, cfg.DERIVED_DIR, cfg.VECTOR_DB_DIR):
+    path.mkdir(parents=True, exist_ok=True)
+# Some legacy extractors use relative data/ paths. Keep those inside the test root too.
+os.chdir(_ROOT)
