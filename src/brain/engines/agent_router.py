@@ -41,7 +41,7 @@ INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
     IntentType.VOICE: ["голосовое", "войс", "аудио", "надиктовал", "наговорил", "запись голоса", "расшифровка"],
     IntentType.OBJECTION: [
         "дорого", "подумаем", "посоветуемся", "нашли дешевле", "позже", "не умеем позировать", "муж против",
-        "посовет", "муж", "партнер", "подума", "не уме", "позиров", "стесня", "боюсь камер", "бревно", "деревянн"
+        "посовет", "муж", "партнер", "подума", "не уме", "позиров", "стесня", "боюсь камер", "страх камер", "страх перед", "боязн", "боюсь", "бревно", "деревянн"
     ],
     IntentType.COMPETITOR: ["конкурент", "другие фотографы", "отстроиться", "отстройка", "рынок", "анализ рынка"],
     IntentType.TASK: ["задач", "дедлайн", "создай задачу", "напомни", "контроль"],
@@ -50,7 +50,7 @@ INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
     IntentType.DISPUTE: [
         "спор", "конфликт", "спорная ситуация", "претензи", "недовольн", "требует исходник",
         "докопал", "жалоб", "скандал", "разбор ситуации", "исходники raw", "отдать raw", "исходники", "не по договору",
-        "отмен", "перенос", "заболе", "простуд", "погод", "дождь", "ливень", "форс-мажор"
+        "отмен", "перенос", "перенес", "заболе", "простуд", "погод", "дожд", "дождь", "ливн", "ливень", "гроз", "снегопад", "метел", "грипп", "боле", "больниц", "форс-мажор"
     ]
 }
 
@@ -98,6 +98,11 @@ class AgentRouter:
                     if re.search(r'(?<![а-яa-z0-9])свет[а-я]*', q_lower):
                         score += 1
                     continue
+                if kw == "муж":
+                    # Avoid collision inside "мужчина", "мужской", "мужество"
+                    if re.search(r'(?<![а-яa-z0-9])муж(?!(чин|ск|еств|еск|ик))[а-я]*', q_lower):
+                        score += 1
+                    continue
                 if kw in q_lower:
                     weight = 2 if (len(kw) > 6 or " " in kw) else 1
                     score += weight
@@ -106,7 +111,7 @@ class AgentRouter:
 
         if any(w in q_lower for w in [
             "спорн", "конфликт", "претензи", "требует исходник", "отдать raw", "исходники raw",
-            "отмен", "перенос", "заболе", "простуд", "погод", "дождь", "ливень", "форс-мажор"
+            "отмен", "перенос", "перенес", "заболе", "простуд", "погод", "дожд", "ливн", "гроз", "снегопад", "метел", "грипп", "форс-мажор"
         ]):
             matched_scores[IntentType.DISPUTE] = matched_scores.get(IntentType.DISPUTE, 0) + 10
 
@@ -117,6 +122,14 @@ class AgentRouter:
         is_photozone = any(w in q_lower for w in ["фотозон", "декоратор"])
         if is_photozone:
             matched_scores[IntentType.PHOTO] = matched_scores.get(IntentType.PHOTO, 0) + 15
+
+        is_introvert_reels = ("интроверт" in q_lower or "без лица" in q_lower or "без говорящей головы" in q_lower or "b-roll" in q_lower) and any(w in q_lower for w in ["reels", "рилс", "ролик", "видео"])
+        is_stories_arc = any(w in q_lower for w in ["арк", "9", "яишк", "прогрев", "шагов", "сценари"]) and any(w in q_lower for w in ["сторис", "stories", "сториз"])
+
+        if is_stories_arc:
+            matched_scores[IntentType.STORIES] = matched_scores.get(IntentType.STORIES, 0) + 15
+        if is_introvert_reels:
+            matched_scores[IntentType.REELS] = matched_scores.get(IntentType.REELS, 0) + 15
 
         if not matched_scores:
             return RoutingDecision(
@@ -138,7 +151,11 @@ class AgentRouter:
             workflow_suggested = "burnout_recovery"
         elif is_photozone:
             workflow_suggested = "photozone_prototyping"
-        elif any(w in q_lower for w in ["отмен", "перенос", "заболе", "простуд", "дождь", "ливень", "форс-мажор"]):
+        elif is_introvert_reels:
+            workflow_suggested = "introvert_reels"
+        elif is_stories_arc:
+            workflow_suggested = "nine_step_stories"
+        elif any(w in q_lower for w in ["отмен", "перенос", "перенес", "заболе", "простуд", "дожд", "ливн", "гроз", "снегопад", "метел", "грипп", "форс-мажор"]):
             workflow_suggested = "cancellation_mediation"
         elif "нечего выложить" in q_lower or "нет идей" in q_lower or "что выложить" in q_lower:
             workflow_suggested = "no_content_emergency"

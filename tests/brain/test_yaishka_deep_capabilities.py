@@ -191,6 +191,11 @@ class TestYaishkaDeepCapabilities:
         dec_advice = router.route("Посоветуй как ответить клиенту на вопрос о датах")
         assert dec_advice.primary_intent != IntentType.PHOTO
 
+        # Collision 3: 'муж' inside 'мужской' / 'мужчина'
+        dec_male = router.route("Мужской портрет: свет и позы")
+        assert dec_male.primary_intent == IntentType.PHOTO
+        assert IntentType.OBJECTION not in dec_male.secondary_intents
+
         # Objection keywords expansion
         dec_husband = router.route("Клиентка говорит: надо посоветоваться с мужем")
         assert dec_husband.primary_intent == IntentType.OBJECTION
@@ -198,7 +203,10 @@ class TestYaishkaDeepCapabilities:
         dec_posing = router.route("Клиентка пишет: я деревянная как бревно и боюсь камеры")
         assert dec_posing.primary_intent == IntentType.OBJECTION
 
-        # Force-majeure & cancellation
+        dec_camera_fear = router.route("У меня страх камеры")
+        assert dec_camera_fear.primary_intent == IntentType.OBJECTION
+
+        # Force-majeure & cancellation (including Russian case inflections)
         dec_cancel_ill = router.route("Клиентка заболела простудой, отмена съемки")
         assert dec_cancel_ill.primary_intent == IntentType.DISPUTE
         assert dec_cancel_ill.workflow_suggested == "cancellation_mediation"
@@ -207,6 +215,10 @@ class TestYaishkaDeepCapabilities:
         assert dec_weather.primary_intent == IntentType.DISPUTE
         assert dec_weather.workflow_suggested == "cancellation_mediation"
 
+        dec_rain_inflect = router.route("Клиентка пишет: из-за дождя мы не сможем приехать, перенесем?")
+        assert dec_rain_inflect.primary_intent == IntentType.DISPUTE
+        assert dec_rain_inflect.workflow_suggested == "cancellation_mediation"
+
         # Burnout crisis detection
         dec_burnout = router.route("У меня выгорание, опускаются руки и нет сил снимать")
         assert dec_burnout.workflow_suggested == "burnout_recovery"
@@ -214,6 +226,15 @@ class TestYaishkaDeepCapabilities:
         # Photozone prototyping
         dec_pz = router.route("Разработай концепт фотозоны для декоратора к осени")
         assert dec_pz.workflow_suggested == "photozone_prototyping"
+
+        # Content workflows (Stories arc and Introvert reels)
+        dec_stories = router.route("Сделай 9-шаговую арку Stories про позирование")
+        assert dec_stories.primary_intent == IntentType.STORIES
+        assert dec_stories.workflow_suggested == "nine_step_stories"
+
+        dec_reels_intro = router.route("Напиши сценарий Reels для интроверта про страх камеры")
+        assert dec_reels_intro.primary_intent == IntentType.REELS
+        assert dec_reels_intro.workflow_suggested == "introvert_reels"
 
         # Music selection discrimination
         dec_photo_music = router.route("Фотосессия на природе под легкую фоновую музыку")
@@ -224,6 +245,13 @@ class TestYaishkaDeepCapabilities:
 
     # 11. Multi-Objection Yaishka-Grade Handling (Husband & Fear of Posing)
     def test_objection_handling_husband_and_posing(self, sales_engine):
+        # Collision prevention in dialogue analysis
+        diag_scen = sales_engine.analyze_client_dialogue("Клиентка прислала сценарий съемки", use_llm=False)
+        assert "дорого" not in diag_scen["detected_objections"]
+
+        diag_male = sales_engine.analyze_client_dialogue("Мы планируем мужскую съемку в студии", use_llm=False)
+        assert "посоветуемся" not in diag_male["detected_objections"]
+
         # Partner / Husband objection
         res_partner = sales_engine.handle_objection_yaishka_style(
             objection_text="Мне очень нравится ваш стиль, но надо посоветоваться с мужем",
@@ -248,6 +276,22 @@ class TestYaishkaDeepCapabilities:
         assert "расслабьтесь" in res_posing["methodological_advice"].lower()
         assert "🤍" in res_posing["client_message"]
 
+        # Camera fear objection
+        res_fear = sales_engine.handle_objection_yaishka_style(
+            objection_text="У меня страх камеры",
+            client_name="Екатерина",
+            use_llm=False
+        )
+        assert res_fear["objection_category"] == "fear_of_posing"
+
+        # Male gender + posing (no collision with partner)
+        res_male_p = sales_engine.handle_objection_yaishka_style(
+            objection_text="У нас мужская фотосессия, но позировать не умею, деревянный",
+            client_name="Сергей",
+            use_llm=False
+        )
+        assert res_male_p["objection_category"] == "fear_of_posing"
+
     # 12. Cancellation & Reschedule Mediation (Weather, Illness, Late Cancellation)
     def test_cancellation_and_reschedule_mediation(self, sales_engine):
         # Weather
@@ -261,6 +305,14 @@ class TestYaishkaDeepCapabilities:
         assert "студи" in res_weather["client_message"].lower()
         assert "задаток" in res_weather["deposit_policy_explanation"].lower()
         assert "🤍" in res_weather["client_message"]
+
+        # Weather with Russian case inflection (из-за сильного дождя)
+        res_rain_inflect = sales_engine.handle_cancellation_and_reschedule(
+            cancellation_text="Съемка не состоится из-за сильного дождя",
+            client_name="Алина",
+            use_llm=False
+        )
+        assert res_rain_inflect["cancellation_type"] == "weather"
 
         # Illness
         res_ill = sales_engine.handle_cancellation_and_reschedule(
@@ -319,7 +371,7 @@ class TestYaishkaDeepCapabilities:
         assert len(res["caption"]) > 30
         assert "REELS ДЛЯ ИНТРОВЕРТА" in res["formatted_script"]
 
-    # 15. BrainService Workflow Integration & HEX Preservation
+    # 15. BrainService Workflow Integration, HEX Preservation & Name Extraction
     def test_brain_service_workflows_and_dual_card_integration(self):
         brain = BrainService()
 
@@ -342,3 +394,42 @@ class TestYaishkaDeepCapabilities:
         q_photozone = "Сделай концепт фотозоны для декоратора"
         r_photozone = brain.router.route(q_photozone)
         assert r_photozone.workflow_suggested == "photozone_prototyping"
+
+        # 5. Introvert Reels Workflow in routing
+        q_reels = "Напиши сценарий Reels для интроверта про страх камеры"
+        r_reels = brain.router.route(q_reels)
+        assert r_reels.workflow_suggested == "introvert_reels"
+        assert r_reels.primary_intent == IntentType.REELS
+
+        # 6. 9-Step Stories Arc Workflow in routing
+        q_stories = "Сделай 9-шаговую арку Stories про позирование"
+        r_stories = brain.router.route(q_stories)
+        assert r_stories.workflow_suggested == "nine_step_stories"
+        assert r_stories.primary_intent == IntentType.STORIES
+
+        # 7. Name Extraction verification (skipping sentence starters like 'Клиентка')
+        import re
+        COMMON_NON_NAMES = {
+            "клиентка", "клиент", "девушка", "невеста", "привет", "здравствуйте",
+            "добрый", "фотограф", "подскажи", "помоги", "напиши", "сделай",
+            "как", "что", "у", "мы", "я", "он", "она", "мне", "нас", "вам"
+        }
+        for q_text, expected_name in [
+            ("Клиентка Анна пишет: надо посоветоваться с мужем", "Анна"),
+            ("Привет! Клиентка Марина пишет: у нас дождь, перенесем?", "Марина"),
+            ("У ребенка температура, заболели", None),
+            ("Наталья пишет: отмена съемки", "Наталья")
+        ]:
+            extracted = None
+            for word in re.findall(r'\b[А-ЯЁ][а-яё]+\b', q_text):
+                if word.lower() not in COMMON_NON_NAMES:
+                    extracted = word
+                    break
+            assert extracted == expected_name
+
+        # 8. HEX Code Preservation in Moodboard and Shoot Prep
+        mb_card = brain.shooting_engine.generate_moodboard_card("Осенняя семейная съемка", use_llm=False)
+        palette_desc = [f"{c['name']} ({c['hex']})" if 'hex' in c else c['name'] for c in mb_card['color_palette']]
+        assert any("#" in p for p in palette_desc)
+        assert "#F5EBE0" in " ".join(palette_desc)
+        assert "#8D5B4C" in " ".join(palette_desc)

@@ -20,16 +20,17 @@ class SalesEngine:
         d_lower = dialogue_text.lower().replace("ё", "е")
         
         # Detect objections (rule baseline)
+        import re
         objections = []
-        if "дорого" in d_lower or "скидк" in d_lower or "цен" in d_lower:
+        if "дорого" in d_lower or "скидк" in d_lower or bool(re.search(r'(?<![а-яa-z0-9])цен[а-я]*', d_lower)):
             objections.append("дорого")
         if "подума" in d_lower:
             objections.append("подумаем")
-        if "посовет" in d_lower or "муж" in d_lower or "партнер" in d_lower:
+        if "посовет" in d_lower or "партнер" in d_lower or bool(re.search(r'(?<![а-яa-z0-9])муж(?!(чин|ск|еств|еск|ик))[а-я]*', d_lower)):
             objections.append("посоветуемся")
         if "дешев" in d_lower:
             objections.append("нашли дешевле")
-        if any(w in d_lower for w in ["позиров", "стесня", "не фотогеничн", "деревянн", "зажат", "скованн", "боюсь"]):
+        if any(w in d_lower for w in ["позиров", "стесня", "не фотогеничн", "деревянн", "зажат", "скованн", "боюсь", "страх камер", "боязн"]):
             objections.append("не умеем позировать")
         if "позже" in d_lower or "весной" in d_lower or "летом" in d_lower or "осенью" in d_lower:
             objections.append("позже")
@@ -379,8 +380,10 @@ class SalesEngine:
         price_clause = f"Базовый пакет: {base_price} ₽." if base_price else ""
         obj_lower = objection_text.lower().replace("ё", "е")
 
-        is_partner = any(w in obj_lower for w in ["муж", "партнер", "посовет", "советоваться", "парень", "супруг"])
-        is_posing = any(w in obj_lower for w in ["позиров", "деревянн", "бревн", "боюсь камер", "стесня", "не уме", "зажат", "скованн", "не фотогеничн"])
+        import re
+        is_husband = bool(re.search(r'(?<![а-яa-z0-9])муж(?!(чин|ск|еств|еск|ик))[а-я]*', obj_lower))
+        is_partner = is_husband or any(w in obj_lower for w in ["партнер", "посовет", "советоваться", "парень", "супруг"])
+        is_posing = any(w in obj_lower for w in ["позиров", "деревянн", "бревн", "боюсь камер", "страх камер", "страх перед", "боязн", "боюсь", "стесня", "не уме", "зажат", "скованн", "не фотогеничн"])
         obj_category = "partner" if is_partner else ("fear_of_posing" if is_posing else "budget")
 
         if use_llm:
@@ -520,8 +523,8 @@ class SalesEngine:
         c_name = client_name or "Имя"
         q_lower = cancellation_text.lower().replace("ё", "е")
 
-        is_weather = any(w in q_lower for w in ["погод", "дождь", "ливень", "непогод", "гроза", "ветер", "шторм", "холод", "слякоть", "сыро"])
-        is_illness = any(w in q_lower for w in ["заболе", "простуд", "температур", "вирус", "болеет", "дети заболели", "ребенок заболел", "плохо себя чувствую", "лежу с температурой"])
+        is_weather = any(w in q_lower for w in ["погод", "дожд", "дождь", "ливн", "ливень", "непогод", "гроз", "ветер", "шторм", "холод", "слякот", "сыро", "снегопад", "метел", "снег", "град", "буря", "ураган"])
+        is_illness = any(w in q_lower for w in ["заболе", "простуд", "температур", "вирус", "боле", "болеет", "дети заболели", "ребенок заболел", "плохо себя чувствую", "лежу с температурой", "грипп", "больниц", "инфекци"])
 
         cancellation_type = "weather" if is_weather else ("illness" if is_illness else "late_cancellation")
 

@@ -214,8 +214,16 @@ class BrainService:
             routing.specialized_system_prompt += f"\n\nСценарий 'Мне нечего выложить'. Предложи готовые ракурсы:\n{a_lines}"
         elif routing.workflow_suggested == "cancellation_mediation":
             import re
-            c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
-            c_name = c_name_match.group(1) if c_name_match else None
+            COMMON_NON_NAMES = {
+                "клиентка", "клиент", "девушка", "невеста", "привет", "здравствуйте",
+                "добрый", "фотограф", "подскажи", "помоги", "напиши", "сделай",
+                "как", "что", "у", "мы", "я", "он", "она", "мне", "нас", "вам"
+            }
+            c_name = None
+            for word in re.findall(r'\b[А-ЯЁ][а-яё]+\b', query):
+                if word.lower() not in COMMON_NON_NAMES:
+                    c_name = word
+                    break
             canc_res = self.sales_engine.handle_cancellation_and_reschedule(query, client_name=c_name, profile=profile)
             routing.specialized_system_prompt += (
                 f"\n\n### ЭТАЛОННЫЙ РАЗБОР ОТМЕНЫ И ПЕРЕНОСА СЪЕМКИ (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
@@ -248,6 +256,18 @@ class BrainService:
                 f"- Текст для предпродаж в блоге:\n{pz_res.get('presale_pitch_text')}\n"
                 f"- Промпт для генерации мокапа:\n`{pz_res.get('image_generation_prompt')}`"
             )
+        elif routing.workflow_suggested == "introvert_reels" or (routing.primary_intent == IntentType.REELS and any(w in query.lower() for w in ["интроверт", "без лица", "без говорящей головы", "b-roll", "стесня"])):
+            reels_res = self.content_engine.generate_introvert_reels_script(query, profile=profile)
+            routing.specialized_system_prompt += (
+                f"\n\n### СЦЕНАРИЙ REELS ДЛЯ ИНТРОВЕРТА (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"{reels_res.get('formatted_script')}"
+            )
+        elif routing.workflow_suggested == "nine_step_stories" or (routing.primary_intent == IntentType.STORIES and any(w in query.lower() for w in ["арк", "9", "яишк", "прогрев", "шагов", "сценари"])):
+            stories_res = self.content_engine.generate_nine_step_stories_arc(query, profile=profile)
+            routing.specialized_system_prompt += (
+                f"\n\n### 9-ШАГОВАЯ АРКА STORIES (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"{stories_res.get('formatted_script')}"
+            )
         elif routing.workflow_suggested == "client_chat_analysis" or routing.primary_intent in [IntentType.SALES, IntentType.OBJECTION]:
             dialogue_analysis = self.sales_engine.analyze_client_dialogue(query)
             strat = dialogue_analysis.get('recommended_strategy', '')
@@ -269,8 +289,16 @@ class BrainService:
                 if not extracted_service and getattr(profile, 'services', None) and profile.services:
                     extracted_service = profile.services[0]
 
-            c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
-            c_name = c_name_match.group(1) if c_name_match else None
+            COMMON_NON_NAMES = {
+                "клиентка", "клиент", "девушка", "невеста", "привет", "здравствуйте",
+                "добрый", "фотограф", "подскажи", "помоги", "напиши", "сделай",
+                "как", "что", "у", "мы", "я", "он", "она", "мне", "нас", "вам"
+            }
+            c_name = None
+            for word in re.findall(r'\b[А-ЯЁ][а-яё]+\b', query):
+                if word.lower() not in COMMON_NON_NAMES:
+                    c_name = word
+                    break
 
             yaishka_obj = self.sales_engine.handle_objection_yaishka_style(
                 query,
@@ -295,6 +323,15 @@ class BrainService:
                 f"- Альтернативный: {resp_opts.get('alternative', '')}\n\n"
                 f"⛔ Чего категорически нельзя писать:\n{what_not or yaishka_obj.get('what_not_to_say', '')}"
             )
+        elif routing.primary_intent == IntentType.REELS:
+            fmt_guide = self.content_engine.build_format_prompt("reels")
+            routing.specialized_system_prompt += f"\n\nСтруктура Reels:\n{fmt_guide}"
+        elif routing.primary_intent == IntentType.STORIES:
+            fmt_guide = self.content_engine.build_format_prompt("stories")
+            routing.specialized_system_prompt += f"\n\nСтруктура Stories:\n{fmt_guide}"
+        elif routing.primary_intent == IntentType.CONTENT:
+            fmt_guide = self.content_engine.build_format_prompt("content")
+            routing.specialized_system_prompt += f"\n\nФормат контента:\n{fmt_guide}"
         elif routing.primary_intent == IntentType.DAILY_PLAN or routing.workflow_suggested == "daily_planning":
             plan = self.proactive_engine.generate_daily_plan(profile=profile)
             p_lines = "\n".join([f"Приоритет {p['priority_level']} [{p['domain']}]: {p['title']} — {p['action']}" for p in plan["priorities"]])
