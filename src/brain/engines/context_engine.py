@@ -132,16 +132,76 @@ class ContextEngine:
             ))
             traces.append(trace)
 
-        # Calculate estimated token/char volume
-        total_chars = (
-            len(policy_block) +
-            len(profile_block) +
-            (len(project_block) if project_block else 0) +
-            (len(client_block) if client_block else 0) +
-            (len(style_instructions) if style_instructions else 0) +
-            sum(len(m.content) for m in context_memories) +
-            sum(len(k.content) for k in context_knowledge)
-        )
+        # Enforce budget quotas and strict character limits
+        max_mem_chars = int(MAX_CONTEXT_CHARS * BUDGET_QUOTAS.get("memories", 0.15))
+        max_know_chars = int(MAX_CONTEXT_CHARS * BUDGET_QUOTAS.get("knowledge", 0.20))
+        max_project_chars = int(MAX_CONTEXT_CHARS * BUDGET_QUOTAS.get("project_context", 0.20))
+        max_client_chars = int(MAX_CONTEXT_CHARS * BUDGET_QUOTAS.get("client_context", 0.15))
+        max_profile_chars = int(MAX_CONTEXT_CHARS * BUDGET_QUOTAS.get("user_profile", 0.15))
+
+        # Truncate profile, project, and client blocks if exceeding budget
+        if len(profile_block) > max_profile_chars:
+            profile_block = profile_block[:max_profile_chars - 20] + "\n... [truncated]"
+
+        if project_block and len(project_block) > max_project_chars:
+            project_block = project_block[:max_project_chars - 20] + "\n... [truncated]"
+
+        if client_block and len(client_block) > max_client_chars:
+            client_block = client_block[:max_client_chars - 20] + "\n... [truncated]"
+
+        # Rank and truncate memories according to quota
+        ranked_memories = self.rank_items(context_memories)
+        fitted_memories: List[ContextItem] = []
+        mem_chars = 0
+        for m in ranked_memories:
+            if mem_chars + len(m.content) <= max_mem_chars:
+                fitted_memories.append(m)
+                mem_chars += len(m.content)
+            elif not fitted_memories:
+                m.content = m.content[:max_mem_chars]
+                fitted_memories.append(m)
+                break
+
+        # Rank and truncate knowledge chunks according to quota
+        ranked_knowledge = self.rank_items(context_knowledge)
+        trace_map = {k.id: t for k, t in zip(context_knowledge, traces)}
+        fitted_knowledge: List[ContextItem] = []
+        fitted_traces: List[SourceTrace] = []
+        know_chars = 0
+        for k in ranked_knowledge:
+            if know_chars + len(k.content) <= max_know_chars:
+                fitted_knowledge.append(k)
+                if k.id in trace_map:
+                    fitted_traces.append(trace_map[k.id])
+                know_chars += len(k.content)
+            elif not fitted_knowledge:
+                k.content = k.content[:max_know_chars]
+                fitted_knowledge.append(k)
+                if k.id in trace_map:
+                    fitted_traces.append(trace_map[k.id])
+                break
+
+        # Global ceiling enforcement: total_chars <= MAX_CONTEXT_CHARS
+        def _calc_total():
+            return (
+                len(policy_block) +
+                len(profile_block) +
+                (len(project_block) if project_block else 0) +
+                (len(client_block) if client_block else 0) +
+                (len(style_instructions) if style_instructions else 0) +
+                sum(len(m.content) for m in fitted_memories) +
+                sum(len(k.content) for k in fitted_knowledge)
+            )
+
+        while _calc_total() > MAX_CONTEXT_CHARS and fitted_knowledge:
+            fitted_knowledge.pop()
+            if fitted_traces:
+                fitted_traces.pop()
+
+        while _calc_total() > MAX_CONTEXT_CHARS and fitted_memories:
+            fitted_memories.pop()
+
+        total_chars = _calc_total()
 
         return AssembledContext(
             system_policy=policy_block,
@@ -149,9 +209,9 @@ class ContextEngine:
             project_context=project_block,
             client_context=client_block,
             style_context=style_instructions,
-            memories=context_memories,
-            knowledge_chunks=context_knowledge,
+            memories=fitted_memories,
+            knowledge_chunks=fitted_knowledge,
             total_chars=total_chars,
             estimated_tokens=total_chars // 4,
-            traces=traces
+            traces=fitted_traces
         )

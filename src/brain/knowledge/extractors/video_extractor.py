@@ -18,6 +18,38 @@ from src.brain.models.file_metadata import (
     ExtractionResult, ExtractedElement, VideoMetadata, SceneInfo, AudioSegment
 )
 
+class SceneDetector:
+    """Abstraction for video scene change detection."""
+    def __init__(self, threshold: float = VIDEO_SCENE_DETECTION_THRESHOLD):
+        self.threshold = threshold
+
+    def detect_scenes(self, video_path: Path, duration: float) -> List[SceneInfo]:
+        """Detects scene boundaries using ffmpeg or fallback interval."""
+        scenes: List[SceneInfo] = []
+        try:
+            cmd = [
+                "ffmpeg", "-i", str(video_path),
+                "-filter:v", f"select='gt(scene,{self.threshold})',showinfo",
+                "-f", "null", "-"
+            ]
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            import re
+            pts_times = [float(m) for m in re.findall(r"pts_time:([0-9.]+)", res.stderr)]
+            pts_times = sorted(list(set([0.0] + pts_times + [duration])))
+            for i in range(len(pts_times) - 1):
+                scenes.append(SceneInfo(
+                    scene_index=i + 1,
+                    start_time=pts_times[i],
+                    end_time=pts_times[i+1],
+                    keyframe_path=None
+                ))
+        except Exception:
+            pass
+
+        if not scenes:
+            scenes.append(SceneInfo(scene_index=1, start_time=0.0, end_time=duration, keyframe_path=None))
+        return scenes
+
 class VideoExtractor(BaseExtractor):
     SUPPORTED_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 
@@ -25,11 +57,27 @@ class VideoExtractor(BaseExtractor):
         self,
         frame_interval_seconds: float = VIDEO_FRAME_INTERVAL_SECONDS,
         scene_threshold: float = VIDEO_SCENE_DETECTION_THRESHOLD,
-        audio_extractor: Optional[AudioExtractor] = None
+        audio_extractor: Optional[AudioExtractor] = None,
+        scene_detector: Optional[SceneDetector] = None
     ):
         self.frame_interval_seconds = frame_interval_seconds
         self.scene_threshold = scene_threshold
         self.audio_extractor = audio_extractor or AudioExtractor()
+        self.scene_detector = scene_detector or SceneDetector(threshold=scene_threshold)
+
+    def cleanup_temp_artifacts(self, derived_dir: Path, keep_keyframes: bool = True):
+        """Cleans up intermediate uncompressed audio or scratch files."""
+        try:
+            audio_wav = derived_dir / "extracted_audio.wav"
+            if audio_wav.exists():
+                audio_wav.unlink(missing_ok=True)
+            if not keep_keyframes:
+                keyframes_dir = derived_dir / "keyframes"
+                if keyframes_dir.exists():
+                    import shutil
+                    shutil.rmtree(keyframes_dir, ignore_errors=True)
+        except Exception:
+            pass
 
     def can_handle(self, extension: str, mime_type: str) -> bool:
         return extension.lower() in self.SUPPORTED_EXTS
@@ -215,6 +263,9 @@ class VideoExtractor(BaseExtractor):
                     metadata={"timestamp_range": ts_label, "frame_path": str(f_path)}
                 ))
                 raw_parts.append(content)
+
+        # Cleanup intermediate uncompressed audio to conserve disk space
+        self.cleanup_temp_artifacts(derived_dir, keep_keyframes=True)
 
         return ExtractionResult(
             source_id=source_id,

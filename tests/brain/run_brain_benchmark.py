@@ -18,7 +18,8 @@ from src.brain.models.knowledge import KnowledgeLayer
 from src.brain.models.style import StyleProfile, ExemplarType, ExemplarCategory
 from src.brain.services.brain_service import BrainService
 
-client = TestClient(app)
+API_KEY = os.environ.get("BRAIN_API_KEY", "local-brain-secure-token-2026")
+client = TestClient(app, headers={"Authorization": f"Bearer {API_KEY}"})
 brain = BrainService()
 
 BENCHMARK = []

@@ -1,0 +1,1096 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Personal AI Brain — Photographer Studio</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;600&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-canvas: #0c0d10;
+      --bg-panel: #13151a;
+      --bg-card: #1b1d24;
+      --bg-input: #15171e;
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-hover: rgba(209, 162, 107, 0.35);
+      --text-main: #f5f2eb;
+      --text-muted: #9e9a91;
+      --text-dim: #68655e;
+      --accent-gold: #d1a26b;
+      --accent-gold-glow: rgba(209, 162, 107, 0.15);
+      --accent-terracotta: #d96b43;
+      --accent-sage: #76a08a;
+      --font-display: 'Cinzel', Georgia, serif;
+      --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background-color: var(--bg-canvas);
+      color: var(--text-main);
+      font-family: var(--font-body);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    header {
+      height: 60px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 24px;
+      flex-shrink: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .brand-logo {
+      width: 28px;
+      height: 28px;
+      border: 1px solid var(--accent-gold);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent-gold);
+      font-family: var(--font-display);
+      font-size: 14px;
+      font-weight: 600;
+      background: var(--accent-gold-glow);
+    }
+    .brand-title {
+      font-family: var(--font-display);
+      font-size: 16px;
+      letter-spacing: 0.08em;
+      color: var(--text-main);
+    }
+    .brand-tag {
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      color: var(--accent-gold);
+      text-transform: uppercase;
+      margin-left: 6px;
+      background: rgba(209, 162, 107, 0.1);
+      padding: 2px 7px;
+      border-radius: 4px;
+      border: 1px solid rgba(209, 162, 107, 0.25);
+    }
+
+    .system-status {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid var(--border-subtle);
+    }
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--accent-sage);
+      box-shadow: 0 0 8px var(--accent-sage);
+    }
+
+    .app-container {
+      flex: 1;
+      display: flex;
+      overflow: hidden;
+    }
+
+    aside {
+      width: 320px;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border-subtle);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      flex-shrink: 0;
+    }
+
+    .aside-section {
+      padding: 18px 20px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .aside-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--text-dim);
+      margin-bottom: 12px;
+      font-weight: 600;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .action-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      color: var(--text-main);
+      font-size: 13px;
+      border-radius: 8px;
+      cursor: pointer;
+      margin-bottom: 8px;
+      transition: all 0.2s ease;
+      text-align: left;
+    }
+    .action-btn:hover {
+      border-color: var(--border-hover);
+      background: rgba(209, 162, 107, 0.08);
+      transform: translateX(2px);
+    }
+    .action-btn .icon {
+      font-size: 15px;
+      color: var(--accent-gold);
+    }
+
+    .btn-gold {
+      background: var(--accent-gold);
+      color: var(--bg-canvas);
+      border: none;
+      padding: 8px 14px;
+      border-radius: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity 0.15s;
+    }
+    .btn-gold:hover { opacity: 0.9; }
+
+    .btn-outline {
+      background: transparent;
+      border: 1px solid var(--accent-gold);
+      color: var(--accent-gold);
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .btn-outline:hover {
+      background: rgba(209, 162, 107, 0.1);
+    }
+
+    .entity-item {
+      padding: 9px 12px;
+      background: rgba(255, 255, 255, 0.02);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      margin-bottom: 6px;
+      font-size: 12px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .entity-name { font-weight: 500; color: var(--text-main); }
+    .entity-status {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: rgba(118, 160, 138, 0.15);
+      color: var(--accent-sage);
+      text-transform: uppercase;
+    }
+
+    main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-canvas);
+      position: relative;
+    }
+
+    #chat-scroll {
+      flex: 1;
+      overflow-y: auto;
+      padding: 28px 36px;
+      display: flex;
+      flex-direction: column;
+      gap: 22px;
+    }
+
+    .message {
+      max-width: 840px;
+      width: 100%;
+      align-self: center;
+      display: flex;
+      gap: 16px;
+      animation: fadeIn 0.25s ease-out;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .message.user { flex-direction: row-reverse; }
+    .avatar {
+      width: 34px;
+      height: 34px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      flex-shrink: 0;
+      font-family: var(--font-display);
+    }
+    .message.assistant .avatar {
+      background: var(--bg-card);
+      border: 1px solid var(--accent-gold);
+      color: var(--accent-gold);
+    }
+    .message.user .avatar {
+      background: var(--accent-gold);
+      color: var(--bg-canvas);
+      font-weight: 600;
+    }
+
+    .msg-body {
+      flex: 1;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 16px 20px;
+      font-size: 14px;
+      line-height: 1.68;
+      color: var(--text-main);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+    }
+    .message.user .msg-body {
+      background: var(--bg-card);
+      border-color: rgba(209, 162, 107, 0.2);
+    }
+
+    .msg-body p { margin-bottom: 10px; }
+    .msg-body p:last-child { margin-bottom: 0; }
+    .msg-body h1, .msg-body h2, .msg-body h3 {
+      font-family: var(--font-display);
+      margin: 14px 0 8px 0;
+      color: var(--accent-gold);
+      letter-spacing: 0.04em;
+    }
+    .msg-body ul, .msg-body ol { margin: 8px 0 8px 20px; }
+    .msg-body li { margin-bottom: 4px; }
+    .msg-body blockquote {
+      border-left: 3px solid var(--accent-gold);
+      padding-left: 12px;
+      margin: 10px 0;
+      color: var(--text-muted);
+      font-style: italic;
+    }
+    .msg-body code {
+      font-family: var(--font-mono);
+      background: rgba(0, 0, 0, 0.35);
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+    }
+
+    .msg-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border-subtle);
+      font-size: 11px;
+      color: var(--text-dim);
+    }
+    .feedback-actions { display: flex; gap: 8px; }
+    .feedback-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .feedback-btn:hover {
+      border-color: var(--accent-gold);
+      color: var(--accent-gold);
+    }
+
+    .img-preview-box {
+      max-width: 320px;
+      border-radius: 8px;
+      overflow: hidden;
+      margin-bottom: 10px;
+      border: 1px solid var(--border-subtle);
+    }
+    .img-preview-box img { width: 100%; height: auto; display: block; }
+
+    .chat-dock {
+      background: var(--bg-panel);
+      border-top: 1px solid var(--border-subtle);
+      padding: 16px 36px 20px 36px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .dock-container {
+      max-width: 840px;
+      width: 100%;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .attachment-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+    .attach-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      background: var(--bg-card);
+      border: 1px solid var(--accent-gold);
+      color: var(--text-main);
+      border-radius: 6px;
+    }
+    .attach-badge .remove-btn {
+      cursor: pointer;
+      color: var(--accent-terracotta);
+      font-weight: bold;
+    }
+
+    .input-wrapper {
+      display: flex;
+      align-items: flex-end;
+      gap: 10px;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 10px 14px;
+      transition: border-color 0.2s;
+    }
+    .input-wrapper:focus-within {
+      border-color: var(--accent-gold);
+      box-shadow: 0 0 0 1px var(--accent-gold-glow);
+    }
+
+    textarea {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--text-main);
+      font-family: var(--font-body);
+      font-size: 14px;
+      resize: none;
+      max-height: 140px;
+      min-height: 24px;
+      line-height: 1.5;
+    }
+    textarea::placeholder { color: var(--text-dim); }
+
+    .tool-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 6px;
+      border-radius: 6px;
+      font-size: 18px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s ease;
+    }
+    .tool-btn:hover {
+      color: var(--accent-gold);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .send-btn {
+      background: var(--accent-gold);
+      color: var(--bg-canvas);
+      border: none;
+      border-radius: 8px;
+      padding: 7px 14px;
+      font-weight: 600;
+      font-size: 13px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: opacity 0.15s;
+    }
+    .send-btn:hover { opacity: 0.9; }
+    .send-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    .typing-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 8px;
+    }
+    .typing-indicator span {
+      width: 6px;
+      height: 6px;
+      background: var(--accent-gold);
+      border-radius: 50%;
+      animation: bounce 1.4s infinite ease-in-out both;
+    }
+    .typing-indicator span:nth-child(1) { animation-delay: -0.32s; }
+    .typing-indicator span:nth-child(2) { animation-delay: -0.16s; }
+    @keyframes bounce {
+      0%, 80%, 100% { transform: scale(0); }
+      40% { transform: scale(1.0); }
+    }
+
+    /* Modal dialog */
+    .modal-overlay {
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .modal-box {
+      background: var(--bg-panel);
+      border: 1px solid var(--border-hover);
+      border-radius: 12px;
+      width: 90%;
+      max-width: 560px;
+      max-height: 85vh;
+      overflow-y: auto;
+      padding: 24px 28px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+    }
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 18px;
+      padding-bottom: 12px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+    .modal-title {
+      font-family: var(--font-display);
+      font-size: 17px;
+      color: var(--accent-gold);
+      letter-spacing: 0.05em;
+    }
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 20px;
+      cursor: pointer;
+    }
+    .close-btn:hover { color: var(--text-main); }
+    .form-group {
+      margin-bottom: 14px;
+    }
+    .form-label {
+      display: block;
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 5px;
+      font-weight: 500;
+    }
+    .form-input {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text-main);
+      font-family: var(--font-body);
+      font-size: 13px;
+      outline: none;
+    }
+    .form-input:focus { border-color: var(--accent-gold); }
+    .form-textarea {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-subtle);
+      border-radius: 6px;
+      padding: 8px 12px;
+      color: var(--text-main);
+      font-family: var(--font-body);
+      font-size: 13px;
+      outline: none;
+      resize: vertical;
+      min-height: 55px;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <div class="brand-logo">Ψ</div>
+      <div class="brand-title">PERSONAL AI BRAIN</div>
+      <div class="brand-tag">Photographer Studio</div>
+    </div>
+    <div class="system-status">
+      <div class="status-pill">
+        <span class="status-dot"></span>
+        <span id="active-photographer-tag">Загрузка...</span>
+      </div>
+      <div class="status-pill">
+        <span>👁️ Vision: Active</span>
+      </div>
+      <div class="status-pill">
+        <span id="mem-count">🧠 Память: 86 фактов</span>
+      </div>
+      <button class="btn-outline" onclick="openProfileModal()">⚙️ Настроить профиль</button>
+    </div>
+  </header>
+
+  <div class="app-container">
+    <aside>
+      <!-- Onboarding & Profile Widget -->
+      <div class="aside-section">
+        <div class="aside-title">
+          <span>Мой Профиль</span>
+          <button class="btn-outline" style="padding: 2px 7px; font-size: 10px;" onclick="openProfileModal()">Изменить</button>
+        </div>
+        <div id="profile-card" style="font-size: 12px; color: var(--text-muted); line-height: 1.6;">
+          • Фотограф: <b id="prof-name" style="color: var(--text-main);">Загрузка...</b><br>
+          • Город: <span id="prof-city">-</span><br>
+          • Ниша: <span id="prof-niche">-</span><br>
+          • Тон: <span id="prof-tone">-</span>
+        </div>
+      </div>
+
+      <!-- Knowledge Ingestion Drop -->
+      <div class="aside-section">
+        <div class="aside-title">
+          <span>База Знаний (Курсы / PDF)</span>
+        </div>
+        <input type="file" id="knowledge-file-input" style="display: none;" onchange="handleKnowledgeUpload(event)" accept=".pdf,.docx,.txt,.md,.mp4,.mov,.mp3,.wav" />
+        <button class="action-btn" onclick="document.getElementById('knowledge-file-input').click()">
+          <span class="icon">📥</span>
+          <span>Загрузить курс / PDF / Видео</span>
+        </button>
+        <div id="knowledge-upload-status" style="font-size: 11px; color: var(--accent-sage); margin-top: 4px; display: none;"></div>
+      </div>
+
+      <!-- Quick Actions -->
+      <div class="aside-section">
+        <div class="aside-title">Быстрые сценарии</div>
+        <button class="action-btn" onclick="sendPrompt('Мне нечего выложить, придумай 3 готовых ракурса из моих проектов и памяти.')">
+          <span class="icon">⚡</span>
+          <span>«Мне нечего выложить»</span>
+        </button>
+        <button class="action-btn" onclick="sendPrompt('Клиентка пишет: «Муж говорит, что это дорого и не хочет фоткаться». Как мягко и уверенно ответить?')">
+          <span class="icon">💬</span>
+          <span>Возражение: «Дорого / Муж против»</span>
+        </button>
+        <button class="action-btn" onclick="sendPrompt('Составь профессиональную схему света и визуальную концепцию для индивидуального портрета.')">
+          <span class="icon">💡</span>
+          <span>Схема света & Мудборд</span>
+        </button>
+        <button class="action-btn" onclick="sendPrompt('Что мне сегодня делать? Собери план дня и приоритеты по моим клиентам и проектам.')">
+          <span class="icon">📅</span>
+          <span>План на сегодня</span>
+        </button>
+        <button class="action-btn" onclick="sendPrompt('Придумай весенний фотодень, рассчитай цену без обесценивания, напиши оффер и 5 прогревочных сторис.')">
+          <span class="icon">🎯</span>
+          <span>Запуск фотодня под ключ</span>
+        </button>
+      </div>
+
+      <!-- CRM Clients List -->
+      <div class="aside-section">
+        <div class="aside-title">Клиенты CRM</div>
+        <div id="clients-list" style="font-size: 12px; color: var(--text-dim);">
+          Загрузка клиентов...
+        </div>
+      </div>
+    </aside>
+
+    <main>
+      <div id="chat-scroll">
+        <div class="message assistant">
+          <div class="avatar">Ψ</div>
+          <div class="msg-body">
+            <p><strong>Привет! Я твой персональный AI Brain.</strong></p>
+            <p>Я работаю на базе твоей личной базы знаний, CRM и мультимодального зрения Gemini Vision.</p>
+            <ul>
+              <li><strong>🎯 Настройка профиля:</strong> Нажми <em>«Настроить профиль»</em> вверху или в левом меню, чтобы указать своё имя, цены и нишу.</li>
+              <li><strong>📥 Твои материалы:</strong> Загружай сюда любые свои курсы, PDF или видеолекции через кнопку слева — Brain изучит их и будет отвечать по твоей базе.</li>
+              <li><strong>📸 Разбор кадра:</strong> Прикрепи фото через скрепку 📎 — разберу свет, позу, композицию и цвет.</li>
+              <li><strong>🎙️ Голосовое:</strong> Прикрепи аудио или надиктуй в Telegram [@Mikki6767_bot](https://t.me/Mikki6767_bot).</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="chat-dock">
+        <div class="dock-container">
+          <div id="attachment-bar" class="attachment-bar" style="display: none;"></div>
+          <div class="input-wrapper">
+            <input type="file" id="file-input" accept="image/*,audio/*" style="display: none;" onchange="handleFileSelected(event)" />
+            <button class="tool-btn" title="Прикрепить фото для разбора или аудио" onclick="document.getElementById('file-input').click()">📎</button>
+            <textarea id="user-input" rows="1" placeholder="Напиши задачу, вопрос или прикрепи фото/голосовое..." onkeydown="handleKeyDown(event)"></textarea>
+            <button class="send-btn" id="send-btn" onclick="submitMessage()">
+              <span>Отправить</span>
+              <span>→</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- Profile Configuration Modal -->
+  <div class="modal-overlay" id="profile-modal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <div class="modal-title">🎯 Персональный бриф фотографа</div>
+        <button class="close-btn" onclick="closeProfileModal()">✕</button>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Ваше имя / Бренд студии:</label>
+        <input type="text" id="m-name" class="form-input" placeholder="например: Максим Белов / Belov Photo" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Город и локации работы:</label>
+        <input type="text" id="m-city" class="form-input" placeholder="например: Москва, Санкт-Петербург" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Ниша и специализация:</label>
+        <input type="text" id="m-niche" class="form-input" placeholder="например: Свадебный репортаж, Женский индивидуальный портрет" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Жанры (через запятую):</label>
+        <input type="text" id="m-genres" class="form-input" placeholder="Свадебная, Лавстори, Индивидуальная, Студийная" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Цены и съемочные пакеты:</label>
+        <input type="text" id="m-prices" class="form-input" placeholder="Экспресс: 15 000 руб, Стандарт: 30 000 руб, Премиум: 50 000 руб" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Целевая аудитория (кто ваши клиенты):</label>
+        <input type="text" id="m-audience" class="form-input" placeholder="Девушки 22-38 лет, ценящие естественность и комфорт в кадре" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Желаемый тон общения:</label>
+        <input type="text" id="m-tone" class="form-input" placeholder="Теплый, экспертный, уверенный, без навязчивости" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Запретные стоп-слова и штампы (через запятую):</label>
+        <input type="text" id="m-forbidden" class="form-input" placeholder="скидочка, красоточка, волшебство, уникальный прайс" />
+      </div>
+      <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px;">
+        <button class="btn-outline" onclick="closeProfileModal()">Отмена</button>
+        <button class="btn-gold" onclick="saveProfileFromModal()">Сохранить профиль</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let attachedFile = null;
+    let attachedFilePath = null;
+    let attachedPreviewUrl = null;
+    let conversationHistory = [];
+
+    const userInput = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+    const chatScroll = document.getElementById('chat-scroll');
+    const attachmentBar = document.getElementById('attachment-bar');
+
+    userInput.addEventListener('input', () => {
+      userInput.style.height = 'auto';
+      userInput.style.height = Math.min(userInput.scrollHeight, 140) + 'px';
+    });
+
+    function handleKeyDown(e) {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        submitMessage();
+      }
+    }
+
+    function sendPrompt(text) {
+      userInput.value = text;
+      userInput.style.height = 'auto';
+      userInput.style.height = Math.min(userInput.scrollHeight, 140) + 'px';
+      submitMessage();
+    }
+
+    // Modal controls
+    function openProfileModal() {
+      document.getElementById('profile-modal').style.display = 'flex';
+    }
+    function closeProfileModal() {
+      document.getElementById('profile-modal').style.display = 'none';
+    }
+
+    // Load Profile & Clients on Init
+    async function loadInitialData() {
+      try {
+        const resp = await fetch('/brain/profile', {
+          headers: { 'Authorization': 'Bearer brain-secure-stage5-federation-key-2026' }
+        });
+        if (resp.ok) {
+          const prof = await resp.json();
+          renderProfile(prof);
+        }
+      } catch (e) {
+        console.error('Failed to load profile', e);
+      }
+
+      try {
+        const cResp = await fetch('/brain/clients', {
+          headers: { 'Authorization': 'Bearer brain-secure-stage5-federation-key-2026' }
+        });
+        if (cResp.ok) {
+          const clients = await cResp.json();
+          renderClients(clients);
+        }
+      } catch (e) {
+        console.error('Failed to load clients', e);
+      }
+    }
+
+    function renderProfile(prof) {
+      const nameEl = document.getElementById('prof-name');
+      const cityEl = document.getElementById('prof-city');
+      const nicheEl = document.getElementById('prof-niche');
+      const toneEl = document.getElementById('prof-tone');
+      const headerTag = document.getElementById('active-photographer-tag');
+
+      if (prof && prof.identity) {
+        nameEl.textContent = prof.identity;
+        cityEl.textContent = prof.city || 'Не указан';
+        nicheEl.textContent = prof.niche || 'Не указана';
+        toneEl.textContent = prof.tone || 'Теплый';
+        headerTag.textContent = `Фотограф: ${prof.identity}`;
+
+        // Populate modal inputs
+        document.getElementById('m-name').value = prof.identity || '';
+        document.getElementById('m-city').value = prof.city || '';
+        document.getElementById('m-niche').value = prof.niche || '';
+        document.getElementById('m-genres').value = (prof.genres || []).join(', ');
+        document.getElementById('m-prices').value = Object.entries(prof.pricing || prof.prices || {}).map(([k, v]) => `${k}: ${v}`).join(', ');
+        document.getElementById('m-audience').value = prof.audience || '';
+        document.getElementById('m-tone').value = prof.tone || '';
+        document.getElementById('m-forbidden').value = (prof.forbidden_words || []).join(', ');
+      } else {
+        nameEl.innerHTML = '<span style="color: var(--accent-gold); cursor: pointer;" onclick="openProfileModal()">[Заполнить бриф]</span>';
+        headerTag.textContent = 'Brain 2.0 (Настройте профиль)';
+      }
+    }
+
+    function renderClients(clients) {
+      const listEl = document.getElementById('clients-list');
+      if (!clients || clients.length === 0) {
+        listEl.innerHTML = '<div style="color: var(--text-dim);">Нет добавленных клиентов</div>';
+        return;
+      }
+      let html = '';
+      clients.slice(0, 5).forEach(c => {
+        html += `
+          <div class="entity-item">
+            <span class="entity-name">${c.name || 'Клиент'}</span>
+            <span class="entity-status">${c.status || 'LEAD'}</span>
+          </div>
+        `;
+      });
+      listEl.innerHTML = html;
+    }
+
+    async function saveProfileFromModal() {
+      const name = document.getElementById('m-name').value.trim();
+      const city = document.getElementById('m-city').value.trim();
+      const niche = document.getElementById('m-niche').value.trim();
+      const genres = document.getElementById('m-genres').value.split(',').map(s => s.trim()).filter(Boolean);
+      const audience = document.getElementById('m-audience').value.trim();
+      const tone = document.getElementById('m-tone').value.trim();
+      const forbidden = document.getElementById('m-forbidden').value.split(',').map(s => s.trim()).filter(Boolean);
+
+      const payload = {
+        identity: name,
+        profession: "Фотограф",
+        city: city,
+        niche: niche,
+        genres: genres,
+        services: genres,
+        pricing: { "Пакет": document.getElementById('m-prices').value.trim() },
+        prices: { "Пакет": document.getElementById('m-prices').value.trim() },
+        audience: audience,
+        tone: tone,
+        forbidden_words: forbidden
+      };
+
+      try {
+        const resp = await fetch('/brain/profile', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer brain-secure-stage5-federation-key-2026'
+          },
+          body: JSON.stringify(payload)
+        });
+        if (resp.ok) {
+          const updated = await resp.json();
+          renderProfile(updated);
+          closeProfileModal();
+          appendMessage('assistant', `<p>🎉 <strong>Профиль обновлен!</strong> Привет, <strong>${name}</strong>. Теперь Brain генерирует все тексты, ответы клиентам и планы с учётом твоей ниши (${niche}) и города (${city})!</p>`);
+        }
+      } catch (err) {
+        alert('Ошибка сохранения: ' + err.message);
+      }
+    }
+
+    // Knowledge file upload
+    async function handleKnowledgeUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const statusEl = document.getElementById('knowledge-upload-status');
+      statusEl.style.display = 'block';
+      statusEl.textContent = `⏳ Индексирую «${file.name}» в векторную базу...`;
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      try {
+        const resp = await fetch('/api/upload_knowledge', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.status === 'success') {
+          statusEl.textContent = `✅ «${file.name}» изучен! Добавлено ${data.chunks_count} фрагментов.`;
+          appendMessage('assistant', `<p>📥 <strong>Материал успешно загружен в базу знаний!</strong><br>Файл: <code>${file.name}</code><br>Смысловых фрагментов: <strong>${data.chunks_count}</strong><br>Теперь ты можешь задавать вопросы по материалам этого документа или курса!</p>`);
+        } else {
+          statusEl.textContent = `❌ Ошибка: ${data.detail || 'Не удалось обработать'}`;
+        }
+      } catch (err) {
+        statusEl.textContent = `❌ Ошибка загрузки: ${err.message}`;
+      }
+    }
+
+    async function handleFileSelected(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      attachedFile = file;
+      const isImg = file.type.startsWith('image/');
+      const isAudio = file.type.startsWith('audio/');
+
+      attachmentBar.style.display = 'flex';
+      attachmentBar.innerHTML = `
+        <div class="attach-badge">
+          <span>${isImg ? '📷 Фото:' : isAudio ? '🎙️ Аудио:' : '📁 Файл:'} ${file.name}</span>
+          <span class="remove-btn" onclick="clearAttachment()">✕</span>
+        </div>
+      `;
+
+      const formData = new FormData();
+      formData.append('file', file);
+      try {
+        const resp = await fetch('/api/upload', {
+          method: 'POST',
+          body: formData
+        });
+        const data = await resp.json();
+        if (data.file_path) {
+          attachedFilePath = data.file_path;
+          attachedPreviewUrl = data.url || URL.createObjectURL(file);
+        }
+      } catch (err) {
+        console.error('Upload failed', err);
+      }
+    }
+
+    function clearAttachment() {
+      attachedFile = null;
+      attachedFilePath = null;
+      attachedPreviewUrl = null;
+      attachmentBar.innerHTML = '';
+      attachmentBar.style.display = 'none';
+      document.getElementById('file-input').value = '';
+    }
+
+    function appendMessage(role, htmlContent, metaText = null) {
+      const msgDiv = document.createElement('div');
+      msgDiv.className = `message ${role}`;
+
+      const avatar = document.createElement('div');
+      avatar.className = 'avatar';
+      avatar.textContent = role === 'assistant' ? 'Ψ' : 'Я';
+
+      const body = document.createElement('div');
+      body.className = 'msg-body';
+      body.innerHTML = htmlContent;
+
+      if (role === 'assistant' && metaText) {
+        const meta = document.createElement('div');
+        meta.className = 'msg-meta';
+        meta.innerHTML = `
+          <span>${metaText}</span>
+          <div class="feedback-actions">
+            <button class="feedback-btn" onclick="sendFeedback('👍 Мне понравилось, сохрани этот стиль!')">👍 В память</button>
+            <button class="feedback-btn" onclick="sendFeedback('👎 Так больше никогда не пиши, убери этот прием.')">👎 Запретить</button>
+          </div>
+        `;
+        body.appendChild(meta);
+      }
+
+      msgDiv.appendChild(avatar);
+      msgDiv.appendChild(body);
+      chatScroll.appendChild(msgDiv);
+      chatScroll.scrollTop = chatScroll.scrollHeight;
+      return body;
+    }
+
+    function sendFeedback(feedbackText) {
+      userInput.value = feedbackText;
+      submitMessage();
+    }
+
+    async function submitMessage() {
+      const query = userInput.value.trim();
+      const currentFilePath = attachedFilePath;
+      const currentPreview = attachedPreviewUrl;
+      const isImg = attachedFile && attachedFile.type.startsWith('image/');
+      const isAudio = attachedFile && attachedFile.type.startsWith('audio/');
+
+      if (!query && !currentFilePath) return;
+
+      let userHtml = '';
+      if (currentPreview && isImg) {
+        userHtml += `<div class="img-preview-box"><img src="${currentPreview}" /></div>`;
+      }
+      if (query) {
+        userHtml += `<p>${query.split("\n").join("<br>")}</p>`;
+      } else if (isImg) {
+        userHtml += `<p><em>[Запрос на фотокритику кадра]</em></p>`;
+      }
+      appendMessage('user', userHtml);
+
+      conversationHistory.push({ role: 'user', content: query || 'Анализ фото' });
+
+      userInput.value = '';
+      userInput.style.height = 'auto';
+      clearAttachment();
+      sendBtn.disabled = true;
+
+      const typingBody = appendMessage('assistant', '<div class="typing-indicator"><span></span><span></span><span></span></div>');
+
+      try {
+        const payload = {
+          query: query || (isImg ? "Проанализируй эту фотографию по 5 критериям: свет, композиция, поза, цвет, рекомендации." : "Разбери голосовую заметку"),
+          images: (isImg && currentFilePath) ? [currentFilePath] : null,
+          audio_path: (isAudio && currentFilePath) ? currentFilePath : null,
+          conversation_history: conversationHistory.slice(-6)
+        };
+
+        const resp = await fetch('/brain/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer brain-secure-stage5-federation-key-2026'
+          },
+          body: JSON.stringify(payload)
+        });
+
+        const data = await resp.json();
+        const text = data.response || 'Ошибка: пустой ответ от Brain Service.';
+        
+        const formatted = formatMarkdown(text);
+        typingBody.innerHTML = formatted;
+
+        const duration = (data.execution_time_ms ? (data.execution_time_ms / 1000).toFixed(2) : '0.8') + 'с';
+        const model = data.model_used || 'Gemini 3.5 Flash';
+        const intent = data.intent || 'General';
+        const meta = document.createElement('div');
+        meta.className = 'msg-meta';
+        meta.innerHTML = `
+          <span>⚡ ${duration} | Модель: ${model} | Интент: ${intent}</span>
+          <div class="feedback-actions">
+            <button class="feedback-btn" onclick="sendFeedback('👍 Мне понравилось, сохрани этот стиль!')">👍 В память</button>
+            <button class="feedback-btn" onclick="sendFeedback('👎 Так больше не пиши, убери этот стиль.')">👎 Запретить</button>
+          </div>
+        `;
+        typingBody.appendChild(meta);
+
+        conversationHistory.push({ role: 'assistant', content: text });
+      } catch (err) {
+        typingBody.innerHTML = `<p style="color: var(--accent-terracotta);">Ошибка соединения: ${err.message}</p>`;
+      } finally {
+        sendBtn.disabled = false;
+        chatScroll.scrollTop = chatScroll.scrollHeight;
+      }
+    }
+
+    function formatMarkdown(src) {
+      if (!src) return '';
+      let res = src
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+      res = res.replace(/^### (.*$)/gim, '<h3>$1</h3>');
+      res = res.replace(/^## (.*$)/gim, '<h2>$1</h2>');
+      res = res.replace(/^# (.*$)/gim, '<h1>$1</h1>');
+      res = res.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
+      res = res.replace(/\*(.*?)\*/gim, '<em>$1</em>');
+      res = res.replace(/^\> (.*$)/gim, '<blockquote>$1</blockquote>');
+      res = res.replace(/```([\s\S]*?)```/gim, '<pre><code>$1</code></pre>');
+      res = res.replace(/`([^`]+)`/gim, '<code>$1</code>');
+      res = res.replace(/^\s*[-•]\s+(.*$)/gim, '<li>$1</li>');
+      res = res.replace(/(<li>.*<\/li>)/gim, '<ul>$1</ul>');
+
+      let paragraphs = res.split("\n\n");
+      res = "<p>" + paragraphs.join("</p><p>") + "</p>";
+      res = res.replace(/<p><\/p>/g, '');
+      res = res.replace(/<p>(<h[123]>.*?<\/h[123]>)<\/p>/g, '$1');
+      res = res.replace(/<p>(<ul>.*?<\/ul>)<\/p>/g, '$1');
+      res = res.replace(/<p>(<pre>.*?<\/pre>)<\/p>/g, '$1');
+      res = res.replace(/<p>(<blockquote>.*?<\/blockquote>)<\/p>/g, '$1');
+      return res;
+    }
+
+    // Load profile on start
+    window.addEventListener('DOMContentLoaded', loadInitialData);
+  </script>
+</body>
+</html>

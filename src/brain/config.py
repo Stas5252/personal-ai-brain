@@ -4,6 +4,10 @@ Centralizes environment settings, database paths, and context ranking hyperparam
 """
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load .env file if present
+load_dotenv()
 
 # Base paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -14,15 +18,25 @@ DB_PATH = os.environ.get("BRAIN_DB_PATH", str(DATA_DIR / "brain.db"))
 
 # Model Provider configuration
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-OPENAI_API_BASE_URL = os.environ.get("OPENAI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+# Upstream LLM Provider endpoint for Brain Service calls (Google Gemini OpenAI-compatible endpoint)
+UPSTREAM_LLM_BASE_URL = os.environ.get(
+    "UPSTREAM_LLM_BASE_URL",
+    "https://generativelanguage.googleapis.com/v1beta/openai/"
+)
+# Open WebUI federation endpoint
+OPENAI_API_BASE_URL = os.environ.get("OPENAI_API_BASE_URL", "http://host.docker.internal:8000/v1")
 OPENWEBUI_BASE_URL = os.environ.get("OPENWEBUI_BASE_URL", "http://localhost:8080")
 
-DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "models/gemini-2.5-flash")
+DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "models/gemini-3.5-flash")
 FALLBACK_MODELS = [
     "models/gemini-3.5-flash",
     "models/gemini-3.5-flash-lite",
     "models/gemini-2.5-flash"
 ]
+
+# Channel configurations
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+MAX_BOT_TOKEN = os.environ.get("MAX_BOT_TOKEN", "")
 
 # Context Engine Weights
 WEIGHT_RELEVANCE = float(os.environ.get("WEIGHT_RELEVANCE", "0.45"))

@@ -224,3 +224,62 @@ class ProfileEngine:
             forbidden_words=forbidden_words,
             updated_at=datetime.now(timezone.utc).isoformat()
         )
+
+    def parse_profile_from_freetext(self, text: str) -> UserProfile:
+        """
+        Parses free-form introduction text or voice transcript into a complete UserProfile via LLM.
+        """
+        from src.brain.services.llm_provider import LLMProvider
+        llm = LLMProvider()
+        prompt = (
+            "Ты — персональный бизнес-ассистент фотографа. Фотограф рассказывает о себе, своей работе, ценах и стиле:\n"
+            f"«««\n{text}\n»»»\n\n"
+            "Заполни карточку профиля фотографа на основе этого рассказа.\n"
+            "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект (без markdown блоков ```json):\n"
+            "{\n"
+            '  "identity": "Имя фотографа или название бренда/студии",\n'
+            '  "city": "Город работы",\n'
+            '  "niche": "Специализация (например: Свадебная фотография, Женский портрет, Контент)",\n'
+            '  "genres": ["список жанров"],\n'
+            '  "services": ["список услуг/пакетов"],\n'
+            '  "pricing": {"Пакет 1": "цена", "Пакет 2": "цена"},\n'
+            '  "audience": "Портрет целевой аудитории (кто клиенты)",\n'
+            '  "tone": "Желаемый тон общения (например: теплый, дерзкий, экспертный)",\n'
+            '  "forbidden_words": ["стоп-слова и штампы, которые фотограф не переносит"],\n'
+            '  "goals": ["цели на сезон"]\n'
+            "}"
+        )
+        try:
+            status_code, resp_text, _, _ = llm.chat_completion(
+                [{"role": "user", "content": prompt}],
+                temperature=0.2
+            )
+            if status_code == 200:
+                clean = resp_text.strip()
+                if clean.startswith("```"):
+                    clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                data = json.loads(clean)
+                current = self.get_profile()
+                updated = UserProfile(
+                    identity=data.get("identity") or current.identity,
+                    profession="Фотограф",
+                    city=data.get("city") or current.city,
+                    niche=data.get("niche") or current.niche,
+                    genres=data.get("genres") or current.genres,
+                    services=data.get("services") or current.services,
+                    prices=data.get("pricing") or current.prices,
+                    pricing=data.get("pricing") or current.pricing,
+                    audience=data.get("audience") or current.audience,
+                    clients=data.get("audience") or current.clients,
+                    goals=data.get("goals") or current.goals,
+                    business_stage="Действующий коммерческий фотограф",
+                    tone=data.get("tone") or current.tone,
+                    forbidden_words=data.get("forbidden_words") or current.forbidden_words,
+                    updated_at=datetime.now(timezone.utc).isoformat()
+                )
+                self.save_profile(updated)
+                return updated
+        except Exception as e:
+            print(f"[!] Error parsing profile from text: {e}")
+        return self.get_profile()
+

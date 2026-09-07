@@ -8,7 +8,7 @@ from src.brain.api.app import app
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    return TestClient(app, headers={"Authorization": "Bearer test-brain-key"})
 
 
 def test_api_health(client):

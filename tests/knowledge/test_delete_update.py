@@ -21,8 +21,10 @@ def vector_index():
 
 def test_source_deletion_purges_all_stores(factory, vector_index, tmp_path):
     # 1. Create a temporary document
-    doc_path = tmp_path / "purge_test.txt"
-    unique_keyword = "ZYLOPHONIC_SECRET_99"
+    import uuid
+    uid = uuid.uuid4().hex[:8]
+    unique_keyword = f"ZYLOPHONIC_SECRET_{uid}"
+    doc_path = tmp_path / f"purge_test_{uid}.txt"
     doc_path.write_text(f"This is a secret document containing {unique_keyword} for purge testing.", encoding="utf-8")
 
     # Ingest

@@ -7,14 +7,17 @@ import os
 import shutil
 import json
 import uuid
+from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, status
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Query, status, Depends
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from src.brain.config import ORIGINALS_DIR, MAX_FILE_SIZE_BYTES, ALLOWED_EXTENSIONS
 from src.brain.db import get_connection
+from src.brain.api.security import verify_brain_api_key
 from src.brain.models.knowledge import (
     KnowledgeLayer, KnowledgeMetadata, KnowledgeChunk, SourceTrace,
     IngestionStatus, ContentType
@@ -23,7 +26,11 @@ from src.brain.knowledge.factory import KnowledgeIngestionFactory
 from src.brain.knowledge.indexing.hybrid_search import HybridSearchEngine
 from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
 
-router = APIRouter(prefix="/knowledge", tags=["knowledge"])
+router = APIRouter(
+    prefix="/knowledge",
+    tags=["knowledge"],
+    dependencies=[Depends(verify_brain_api_key)]
+)
 
 factory = KnowledgeIngestionFactory()
 search_engine = HybridSearchEngine()
@@ -80,7 +87,7 @@ async def create_or_upload_source(
             layer_enum = KnowledgeLayer.GLOBAL
 
     if file and file.filename:
-        # File upload branch
+        # File upload branch - fully asynchronous ingestion
         suffix = Path(file.filename).suffix.lower()
         if suffix not in ALLOWED_EXTENSIONS:
             raise HTTPException(
@@ -103,21 +110,78 @@ async def create_or_upload_source(
                     detail=f"File exceeds maximum allowed size of {MAX_FILE_SIZE_BYTES} bytes."
                 )
 
-            source_meta, chunks = factory.ingest_file(
-                file_path=temp_file_path,
-                author=author or "User",
-                override_layer=layer_enum,
-                subcategory=subcategory,
-                tags=tag_list,
-                project=project,
-                client=client,
-                force=force
-            )
-            return {
-                "status": source_meta.status.value,
-                "source": source_meta.model_dump(),
-                "chunks_count": len(chunks)
+            # Deep magic bytes and format validation
+            val = factory.storage.validate_file(temp_file_path)
+            if not val.is_valid:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File validation failed: {val.error_message}"
+                )
+
+            # Duplicate detection
+            existing = factory.storage.check_duplicate(val.sha256)
+            if existing and not force:
+                return JSONResponse(
+                    status_code=status.HTTP_200_OK,
+                    content={
+                        "status": "DUPLICATE",
+                        "source_id": existing["source_id"],
+                        "message": "Source already exists in knowledge store"
+                    }
+                )
+
+            # Store original file permanently in originals storage
+            orig_dest = factory.storage.store_original(temp_file_path, val.sha256, val.safe_filename)
+            source_id = str(uuid.uuid4())
+            derived_dir = factory.storage.get_derived_dir(source_id)
+            now_str = datetime.now(timezone.utc).isoformat()
+            date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            source_title = title or Path(file.filename).stem.replace("_", " ").title()
+
+            meta = {
+                "author": author or "User",
+                "subcategory": subcategory,
+                "tags": tag_list,
+                "project": project,
+                "client": client,
+                "layer": (layer_enum.value if layer_enum else KnowledgeLayer.GLOBAL.value)
             }
+
+            conn = get_connection()
+            c = conn.cursor()
+            c.execute("""
+            INSERT INTO knowledge_sources (
+                source_id, title, author, date, type, category, subcategory,
+                tags_json, project, client, language, source_path, timestamp,
+                confidence, original_filename, mime_type, file_size, sha256,
+                p_hash, storage_path, derived_dir, ingestion_status,
+                processing_version, classification_method, seen_count,
+                checkpoint_stage, metadata_json
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                source_id, source_title, author or "User", date_str, "document",
+                (layer_enum.value if layer_enum else KnowledgeLayer.GLOBAL.value), subcategory,
+                json.dumps(tag_list), project, client,
+                "ru", str(orig_dest), now_str, 1.0,
+                val.safe_filename, val.mime_type, val.file_size, val.sha256,
+                val.p_hash, str(orig_dest), str(derived_dir), "QUEUED",
+                "v1.0", "rules", 1, "QUEUED", json.dumps(meta)
+            ))
+            conn.commit()
+            conn.close()
+
+            # Enqueue asynchronous ingestion job
+            job = queue.enqueue_job(source_id=source_id, priority=10)
+
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "status": "QUEUED",
+                    "source_id": source_id,
+                    "job_id": job.job_id,
+                    "message": "File accepted and queued for background ingestion."
+                }
+            )
         finally:
             if temp_file_path.exists():
                 try:
@@ -300,8 +364,8 @@ def get_source_detail(source_id: str):
 @router.post("/sources/{source_id}/reprocess")
 def reprocess_source(source_id: str):
     """
-    Reprocesses an existing source by re-reading original stored file or content,
-    purging existing chunks and embeddings, and re-running extraction and indexing.
+    Asynchronously re-queues an existing source for full re-extraction and indexing.
+    Returns HTTP 202 Accepted.
     """
     conn = get_connection()
     c = conn.cursor()
@@ -312,35 +376,31 @@ def reprocess_source(source_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Knowledge source not found")
 
-    source_path = row["source_path"]
+    source_path = row["source_path"] or row["storage_path"]
     if not source_path or not Path(source_path).exists():
         raise HTTPException(
             status_code=400,
             detail=f"Original source file not found at '{source_path}'. Cannot reprocess."
         )
 
-    # Ingest file with force=True (updates in-place and clears old chunks)
-    meta, chunks = factory.ingest_file(
-        file_path=Path(source_path),
-        author=row["author"],
-        override_layer=KnowledgeLayer(row["category"]) if row["category"] else None,
-        subcategory=row["subcategory"],
-        project=row["project"],
-        client=row["client"],
-        force=True
-    )
+    # Queue reprocess job with high priority
+    job = queue.enqueue_job(source_id=source_id, priority=15)
 
-    return {
-        "status": "reprocessed",
-        "source_id": source_id,
-        "chunks_count": len(chunks)
-    }
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "QUEUED",
+            "source_id": source_id,
+            "job_id": job.job_id,
+            "message": "Source queued for background reprocessing."
+        }
+    )
 
 
 @router.post("/sources/{source_id}/retry")
 def retry_failed_source(source_id: str):
     """
-    Retries ingestion for a failed source.
+    Asynchronously retries ingestion for a failed source. Returns HTTP 202 Accepted.
     """
     conn = get_connection()
     c = conn.cursor()
@@ -351,20 +411,21 @@ def retry_failed_source(source_id: str):
     if not row:
         raise HTTPException(status_code=404, detail="Knowledge source not found")
 
-    source_path = row["source_path"]
+    source_path = row["source_path"] or row["storage_path"]
     if not source_path or not Path(source_path).exists():
         raise HTTPException(status_code=400, detail="Source file unavailable for retry")
 
-    meta, chunks = factory.ingest_file(
-        file_path=Path(source_path),
-        force=True
-    )
+    job = queue.enqueue_job(source_id=source_id, priority=12)
 
-    return {
-        "status": "retried",
-        "new_status": meta.status.value,
-        "chunks_count": len(chunks)
-    }
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "status": "QUEUED",
+            "source_id": source_id,
+            "job_id": job.job_id,
+            "message": "Source queued for retry."
+        }
+    )
 
 
 @router.delete("/sources/{source_id}")
@@ -395,6 +456,10 @@ def delete_source(source_id: str):
             pass
 
     # Delete from FTS5
+    try:
+        c.execute("DELETE FROM knowledge_chunks_fts WHERE source_id = ?", (source_id,))
+    except Exception:
+        pass
     if chunk_ids:
         placeholders = ",".join("?" for _ in chunk_ids)
         try:
@@ -419,20 +484,23 @@ def delete_source(source_id: str):
 @router.get("/sources/{source_id}/status")
 def get_source_status(source_id: str):
     """
-    Returns live ingestion status, error message, and step for a source.
+    Returns rich live ingestion status, lease details, and step for a source.
     """
     conn = get_connection()
     c = conn.cursor()
-    c.execute("SELECT ingestion_status, error_message, source_path, timestamp FROM knowledge_sources WHERE source_id = ?", (source_id,))
+    c.execute("SELECT * FROM knowledge_sources WHERE source_id = ?", (source_id,))
     row = c.fetchone()
-    
-    # Check if there's a queue job
-    c.execute("SELECT job_id, status, stage, attempts, error_message FROM ingestion_jobs WHERE source_id = ? ORDER BY created_at DESC LIMIT 1", (source_id,))
+
+    # Check latest queue job
+    c.execute("SELECT * FROM ingestion_jobs WHERE source_id = ? ORDER BY created_at DESC LIMIT 1", (source_id,))
     job_row = c.fetchone()
     conn.close()
 
     if not row and not job_row:
         raise HTTPException(status_code=404, detail="Source status not found")
+
+    j_keys = job_row.keys() if (job_row and hasattr(job_row, "keys")) else []
+    r_keys = row.keys() if (row and hasattr(row, "keys")) else []
 
     job_info = None
     if job_row:
@@ -441,6 +509,9 @@ def get_source_status(source_id: str):
             "job_status": job_row["status"],
             "current_step": job_row["stage"],
             "retry_count": job_row["attempts"],
+            "worker_id": job_row["worker_id"] if "worker_id" in j_keys else None,
+            "lease_until": job_row["lease_until"] if "lease_until" in j_keys else None,
+            "progress": job_row["progress"],
             "error": job_row["error_message"]
         }
 
@@ -449,7 +520,16 @@ def get_source_status(source_id: str):
     return {
         "source_id": source_id,
         "status": status_val,
-        "error_message": row["error_message"] if row else None,
+        "stage": job_row["stage"] if job_row else (row["checkpoint_stage"] if "checkpoint_stage" in r_keys else "UNKNOWN"),
+        "progress": job_row["progress"] if job_row else (1.0 if status_val == "COMPLETED" else 0.0),
+        "attempt": job_row["attempts"] if job_row else 0,
+        "max_attempts": job_row["max_attempts"] if job_row else 3,
+        "worker_id": job_row["worker_id"] if job_row and "worker_id" in j_keys else None,
+        "lease_until": job_row["lease_until"] if job_row and "lease_until" in j_keys else None,
+        "started_at": job_row["created_at"] if job_row else (row["timestamp"] if "timestamp" in r_keys else None),
+        "updated_at": job_row["updated_at"] if job_row else (row["timestamp"] if "timestamp" in r_keys else None),
+        "error": job_row["error_message"] if job_row else (row["error_message"] if "error_message" in r_keys else None),
+        "error_message": row["error_message"] if row and "error_message" in r_keys else None,
         "job": job_info
     }
 

@@ -1,4 +1,4 @@
-﻿name: personal-ai
+name: personal-ai
 
 services:
   open-webui:
@@ -12,10 +12,11 @@ services:
       - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
       - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
       - WEBUI_NAME=${WEBUI_NAME:-Personal AI Studio}
-      - DEFAULT_MODELS=${DEFAULT_MODELS:-gemini-2.5-flash}
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL}
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DEFAULT_MODELS=${DEFAULT_MODELS:-personal-ai-brain}
+      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://host.docker.internal:8000/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-brain-secure-stage5-federation-key-2026}
       - CHAT_COMPLETION_TIMEOUT=120
+      - ENABLE_RAG_WEB_SEARCH=false
     volumes:
       - open-webui-data:/app/backend/data
     extra_hosts:

@@ -7,20 +7,20 @@ The system was evaluated against a pilot corpus of 8 diverse, realistic photogra
 
 ### Key Benchmark Results
 
-| Metric | Measured Score | Stage 4 Target | Status |
+| Metric | Measured Score | Stage 5 Target | Status |
 | :--- | :--- | :--- | :--- |
-| **Top-1 Retrieval Accuracy** | **89.58%** (43/48) | — | **Exceptional** |
-| **Top-3 Retrieval Accuracy** | **91.67%** (44/48) | $\ge 85.0\%$ | **EXCEEDED (+6.67%)** |
+| **Top-1 Retrieval Accuracy** | **89.58%** (43/48) | $\ge 85.0\%$ | **EXCEEDED (+4.58%)** |
+| **Top-3 Retrieval Accuracy** | **93.75%** (45/48) | $\ge 85.0\%$ | **EXCEEDED (+8.75%)** |
 | **Refusal Precision (Negative Queries)** | **100.0%** (6/6) | $\ge 85.0\%$ | **EXCEEDED (+15.0%)** |
-| **Citation Traceability** | **93.75%** (45/48) | $\ge 90.0\%$ | **EXCEEDED (+3.75%)** |
-| **Mean Query Latency** | **599.36 ms** | $\le 1500\text{ ms}$ | **EXCEEDED (2.5x faster)** |
+| **Citation Traceability** | **95.83%** (46/48) | $\ge 90.0\%$ | **EXCEEDED (+5.83%)** |
+| **Mean Query Latency** | **192.21 ms** | $\le 1500\text{ ms}$ | **EXCEEDED (7.8x faster)** |
 
 ```mermaid
 pie title 54-Query Benchmark Outcome Distribution
     "Top-1 Accurate Match" : 43
-    "Top-3 Accurate Match" : 1
+    "Top-3 Accurate Match" : 2
     "Negative Refusal (Accurate)" : 6
-    "Sub-optimal Rank / Out of Range" : 4
+    "Sub-optimal Rank / Out of Range" : 3
 ```
 
 ---

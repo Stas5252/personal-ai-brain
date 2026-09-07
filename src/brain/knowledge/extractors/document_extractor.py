@@ -15,6 +15,7 @@ import fitz  # PyMuPDF
 
 from src.brain.knowledge.extractors.base import BaseExtractor
 from src.brain.models.file_metadata import ExtractionResult, ExtractedElement
+from src.brain.knowledge.extractors.ocr_engine import OCREngine
 
 class DocumentExtractor(BaseExtractor):
     SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html", ".htm"}
@@ -101,6 +102,14 @@ class DocumentExtractor(BaseExtractor):
                         except Exception:
                             pass
 
+                if not sidecar_ocr:
+                    try:
+                        ocr_res = OCREngine.get_instance().ocr_image(scan_img_path)
+                        if ocr_res and ocr_res.get("text"):
+                            sidecar_ocr = ocr_res["text"].strip()
+                    except Exception:
+                        pass
+
                 scan_content = sidecar_ocr if sidecar_ocr else (text if text else f"Сканированная страница {page_num}")
                 elem_type = "ocr" if sidecar_ocr else "scanned_page"
                 elements.append(ExtractedElement(
@@ -108,7 +117,7 @@ class DocumentExtractor(BaseExtractor):
                     content=scan_content,
                     page_number=page_num,
                     heading_path=current_heading or f"Страница {page_num}",
-                    metadata={"is_scan": True, "scan_image": str(scan_img_path), "has_ocr": bool(sidecar_ocr)}
+                    metadata={"is_scan": True, "scan_image": str(scan_img_path), "has_ocr": bool(sidecar_ocr), "ocr_engine": "rapidocr" if sidecar_ocr else None}
                 ))
                 raw_parts.append(scan_content)
                 continue
@@ -295,12 +304,12 @@ class DocumentExtractor(BaseExtractor):
                 if row_items:
                     sheet_rows_text.append(f"Запись {r_idx+1}: " + ", ".join(row_items))
 
-            sheet_content = f"Лист '{sheet_name}' ({len(sheet_rows_text)} строк):\n" + "\n".join(sheet_rows_text)
+            sheet_content = f"Таблица: Лист '{sheet_name}' ({len(sheet_rows_text)} строк):\n" + "\n".join(sheet_rows_text)
             elements.append(ExtractedElement(
                 element_type="table",
                 content=sheet_content,
                 sheet_name=sheet_name,
-                heading_path=f"Excel > {sheet_name}",
+                heading_path=f"Прайс-лист > {sheet_name}",
                 metadata={"sheet_name": sheet_name, "row_count": len(sheet_rows_text)}
             ))
             raw_parts.append(sheet_content)

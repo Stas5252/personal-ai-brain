@@ -142,11 +142,26 @@ def init_db():
         progress REAL NOT NULL DEFAULT 0.0,
         checkpoint_stage TEXT,
         error_message TEXT,
+        worker_id TEXT,
+        lease_until TEXT,
+        heartbeat_at TEXT,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         FOREIGN KEY(source_id) REFERENCES knowledge_sources(source_id) ON DELETE CASCADE
     )
     """)
+
+    # Migration for leasing columns in ingestion_jobs
+    c.execute("PRAGMA table_info(ingestion_jobs)")
+    existing_job_cols = {r["name"] for r in c.fetchall()}
+    for col_name, col_type in [
+        ("worker_id", "TEXT"), ("lease_until", "TEXT"), ("heartbeat_at", "TEXT")
+    ]:
+        if col_name not in existing_job_cols:
+            c.execute(f"ALTER TABLE ingestion_jobs ADD COLUMN {col_name} {col_type}")
+
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ij_lease ON ingestion_jobs(status, lease_until, priority DESC)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_ij_worker ON ingestion_jobs(worker_id)")
 
     # 3.2 FTS5 Full-Text Search Table
     c.execute("""
@@ -215,7 +230,67 @@ def init_db():
     )
     """)
     
-    # 7. Request Traces table
+    # Safe migrations for clients
+    c.execute("PRAGMA table_info(clients)")
+    existing_client_cols = {r["name"] for r in c.fetchall()}
+    for col_name, col_type in [
+        ("source_channel", "TEXT"), ("preferred_style", "TEXT"),
+        ("objections_history_json", "TEXT DEFAULT '[]'"), ("last_contact_at", "TEXT")
+    ]:
+        if col_name not in existing_client_cols:
+            c.execute(f"ALTER TABLE clients ADD COLUMN {col_name} {col_type}")
+
+    # Safe migrations for projects
+    c.execute("PRAGMA table_info(projects)")
+    existing_project_cols = {r["name"] for r in c.fetchall()}
+    for col_name, col_type in [
+        ("concept", "TEXT DEFAULT ''"), ("location", "TEXT"),
+        ("shot_list_json", "TEXT DEFAULT '[]'"), ("moodboard_refs_json", "TEXT DEFAULT '[]'"),
+        ("deliverables_json", "TEXT DEFAULT '[]'")
+    ]:
+        if col_name not in existing_project_cols:
+            c.execute(f"ALTER TABLE projects ADD COLUMN {col_name} {col_type}")
+
+    # 7. Tasks table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS tasks (
+        task_id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        priority TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        due_at TEXT,
+        project_id TEXT,
+        client_id TEXT,
+        inputs_json TEXT NOT NULL DEFAULT '{}',
+        outputs_json TEXT NOT NULL DEFAULT '{}',
+        approval_state TEXT NOT NULL DEFAULT 'NONE'
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, priority, due_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_tasks_client ON tasks(client_id)")
+
+    # 8. Workflows table
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS workflows (
+        workflow_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        workflow_type TEXT NOT NULL,
+        status TEXT NOT NULL,
+        current_step INTEGER NOT NULL DEFAULT 0,
+        steps_json TEXT NOT NULL DEFAULT '[]',
+        context_json TEXT NOT NULL DEFAULT '{}',
+        results_json TEXT NOT NULL DEFAULT '{}',
+        approval_state TEXT NOT NULL DEFAULT 'NONE',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    )
+    """)
+    c.execute("CREATE INDEX IF NOT EXISTS idx_wf_status ON workflows(status, updated_at)")
+
+    # 9. Request Traces table
     c.execute("""
     CREATE TABLE IF NOT EXISTS request_traces (
         request_id TEXT PRIMARY KEY,
@@ -226,7 +301,7 @@ def init_db():
     )
     """)
     
-    # 8. Onboarding Sessions table
+    # 10. Onboarding Sessions table
     c.execute("""
     CREATE TABLE IF NOT EXISTS onboarding_sessions (
         session_id TEXT PRIMARY KEY,

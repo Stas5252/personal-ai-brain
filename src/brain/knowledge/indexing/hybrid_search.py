@@ -143,8 +143,8 @@ class HybridSearchEngine:
                 # If very low overlap (< 25%), require strong vector similarity (>= 0.62)
                 if query_keywords and kw_overlap < 0.25 and v_score < 0.62:
                     continue
-                # If partial overlap (< 45%), reject if vector score is weak (< 0.60)
-                if query_keywords and kw_overlap < 0.45 and v_score < 0.60:
+                # If partial overlap (< 45%), reject if vector score is weak (< 0.63)
+                if query_keywords and kw_overlap < 0.45 and v_score < 0.63:
                     continue
                 # Pure fallback threshold
                 if f_score == 0.0 and v_score < 0.52:

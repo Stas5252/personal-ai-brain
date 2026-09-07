@@ -8,11 +8,18 @@ from pydantic import BaseModel, Field
 
 class ProjectStatus(str, Enum):
     IDEA = "IDEA"
+    PLANNED = "PLANNED"
     PLANNING = "PLANNING"
+    BOOKED = "BOOKED"
+    PREPARATION = "PREPARATION"
     PRE_PRODUCTION = "PRE_PRODUCTION"
     SHOOTING = "SHOOTING"
+    EDITING = "EDITING"
     POST_PROCESSING = "POST_PROCESSING"
+    DELIVERY = "DELIVERY"
     DELIVERED = "DELIVERED"
+    COMPLETED = "COMPLETED"
+    FOLLOW_UP = "FOLLOW_UP"
     ARCHIVED = "ARCHIVED"
 
 class ProjectTask(BaseModel):
@@ -29,6 +36,11 @@ class Project(BaseModel):
     start_date: Optional[str] = None
     deadline: Optional[str] = None
     client_id: Optional[str] = None
+    concept: str = ""
+    location: Optional[str] = None
+    shot_list: List[str] = Field(default_factory=list)
+    moodboard_refs: List[str] = Field(default_factory=list)
+    deliverables: List[str] = Field(default_factory=list)
     files: List[str] = Field(default_factory=list)
     conversations: List[str] = Field(default_factory=list)
     tasks: List[ProjectTask] = Field(default_factory=list)

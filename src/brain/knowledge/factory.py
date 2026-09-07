@@ -72,7 +72,8 @@ class KnowledgeIngestionFactory:
         project: Optional[str] = None,
         client: Optional[str] = None,
         job_id: Optional[str] = None,
-        force: bool = False
+        force: bool = False,
+        source_id: Optional[str] = None
     ) -> Tuple[KnowledgeSource, List[KnowledgeChunk]]:
         """
         Executes complete, idempotent ingestion pipeline for a single source file.
@@ -100,13 +101,13 @@ class KnowledgeIngestionFactory:
             raise ValueError(f"File validation failed: {val.error_message}")
 
         # Step 2: SHA-256 Deduplication Check
-        existing = self.storage.check_duplicate(val.sha256)
+        existing = self.storage.check_duplicate(val.sha256, exclude_source_id=source_id)
         if existing and not force:
-            source_id = existing["source_id"]
-            self.storage.record_duplicate_encounter(source_id)
+            dup_source_id = existing["source_id"]
+            self.storage.record_duplicate_encounter(dup_source_id)
             conn = get_connection()
             c = conn.cursor()
-            c.execute("SELECT * FROM knowledge_chunks WHERE source_id = ?", (source_id,))
+            c.execute("SELECT * FROM knowledge_chunks WHERE source_id = ?", (dup_source_id,))
             rows = c.fetchall()
             conn.close()
             existing_chunks = []
@@ -128,12 +129,12 @@ class KnowledgeIngestionFactory:
                     created_at=cr["created_at"]
                 ))
             src_obj = KnowledgeSource(
-                source_id=source_id,
-                original_filename=existing["original_filename"],
-                mime_type=existing["mime_type"],
-                file_size=existing["file_size"],
-                sha256=existing["sha256"],
-                storage_path=existing["storage_path"],
+                source_id=dup_source_id,
+                original_filename=existing.get("original_filename") or "unknown_file",
+                mime_type=existing.get("mime_type") or "text/plain",
+                file_size=existing.get("file_size") or 0,
+                sha256=existing.get("sha256") or "",
+                storage_path=existing.get("storage_path"),
                 derived_dir=existing["derived_dir"],
                 created_at=existing["timestamp"],
                 ingestion_status=IngestionStatus.DUPLICATE,
@@ -146,7 +147,7 @@ class KnowledgeIngestionFactory:
             self.delete_source(existing["source_id"], delete_original=False)
 
         # Step 3: Registration & Storage of Original
-        source_id = str(uuid.uuid4())
+        source_id = source_id or str(uuid.uuid4())
         sm = IngestionStateMachine(source_id=source_id, job_id=job_id)
         now_str = datetime.now(timezone.utc).isoformat()
         date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -166,7 +167,7 @@ class KnowledgeIngestionFactory:
         else:
             source_type = "document"
 
-        # Insert initial DISCOVERED record
+        # Insert or update initial DISCOVERED record
         conn = get_connection()
         c = conn.cursor()
         c.execute("""
@@ -178,6 +179,14 @@ class KnowledgeIngestionFactory:
             processing_version, classification_method, seen_count,
             checkpoint_stage, metadata_json
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(source_id) DO UPDATE SET
+            title = excluded.title,
+            storage_path = excluded.storage_path,
+            source_path = excluded.source_path,
+            derived_dir = excluded.derived_dir,
+            ingestion_status = excluded.ingestion_status,
+            checkpoint_stage = excluded.checkpoint_stage,
+            timestamp = excluded.timestamp
         """, (
             source_id, source_title, meta.get("author", "Owner"), date_str, source_type,
             (layer.value if layer else KnowledgeLayer.GLOBAL.value), meta.get("subcategory"),
@@ -353,7 +362,7 @@ class KnowledgeIngestionFactory:
                     os.remove(r["storage_path"])
                 except Exception:
                     pass
-            c.execute("DELETE FROM knowledge_sources WHERE source_id = ?", (source_id,))
+        c.execute("DELETE FROM knowledge_sources WHERE source_id = ?", (source_id,))
 
         conn.commit()
         conn.close()

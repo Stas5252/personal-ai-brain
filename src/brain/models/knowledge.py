@@ -145,6 +145,9 @@ class IngestionJob(BaseModel):
     progress: float = 0.0
     checkpoint_stage: Optional[str] = None
     error_message: Optional[str] = None
+    worker_id: Optional[str] = None
+    lease_until: Optional[str] = None
+    heartbeat_at: Optional[str] = None
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

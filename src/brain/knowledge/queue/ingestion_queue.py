@@ -51,38 +51,133 @@ class IngestionQueue:
             updated_at=now_str
         )
 
-    def get_next_job(self) -> Optional[IngestionJob]:
-        now_str = datetime.now(timezone.utc).isoformat()
+    def claim_job(self, worker_id: str = "default_worker", lease_seconds: int = 60) -> Optional[IngestionJob]:
+        """
+        Atomically claims the highest priority ready or stale job with a lease.
+        Prevents dual-execution across multiple workers.
+        """
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        lease_until_str = (now + timedelta(seconds=lease_seconds)).isoformat()
+
         conn = get_connection()
         c = conn.cursor()
 
-        # Pick highest priority, ready to process
+        # Find candidate job
         c.execute("""
-        SELECT * FROM ingestion_jobs
-        WHERE (status = 'DISCOVERED' OR status = 'RETRY_PENDING')
-          AND (next_retry_at IS NULL OR next_retry_at <= ?)
+        SELECT job_id, status FROM ingestion_jobs
+        WHERE ((status IN ('DISCOVERED', 'RETRY_PENDING') AND (next_retry_at IS NULL OR next_retry_at <= ?))
+            OR (status NOT IN ('COMPLETED', 'FAILED', 'SKIPPED', 'DUPLICATE') AND lease_until IS NOT NULL AND lease_until <= ?))
         ORDER BY priority DESC, created_at ASC
         LIMIT 1
-        """, (now_str,))
+        """, (now_str, now_str))
         row = c.fetchone()
         if not row:
             conn.close()
             return None
 
         job_id = row["job_id"]
-        # Mark as PROCESSING immediately
+        # Atomically claim
         c.execute("""
         UPDATE ingestion_jobs
-        SET status = 'VALIDATING', attempts = attempts + 1, updated_at = ?
+        SET worker_id = ?,
+            lease_until = ?,
+            heartbeat_at = ?,
+            status = 'VALIDATING',
+            stage = 'VALIDATING',
+            attempts = attempts + 1,
+            updated_at = ?
         WHERE job_id = ?
-        """, (now_str, job_id))
+        """, (worker_id, lease_until_str, now_str, now_str, job_id))
         conn.commit()
 
         c.execute("SELECT * FROM ingestion_jobs WHERE job_id = ?", (job_id,))
         updated_row = c.fetchone()
         conn.close()
 
-        return self._row_to_job(updated_row)
+        if updated_row and updated_row["worker_id"] == worker_id:
+            return self._row_to_job(updated_row)
+        return None
+
+    def heartbeat(self, job_id: str, worker_id: str, lease_seconds: int = 60) -> bool:
+        """Extends worker lease if worker still holds the job."""
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        lease_until_str = (now + timedelta(seconds=lease_seconds)).isoformat()
+
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+        UPDATE ingestion_jobs
+        SET lease_until = ?, heartbeat_at = ?, updated_at = ?
+        WHERE job_id = ? AND worker_id = ?
+        """, (lease_until_str, now_str, now_str, job_id, worker_id))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
+
+    def release_job(self, job_id: str, worker_id: str) -> bool:
+        """Releases lease on job (e.g. upon graceful shutdown or worker release)."""
+        now_str = datetime.now(timezone.utc).isoformat()
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+        UPDATE ingestion_jobs
+        SET worker_id = NULL, lease_until = NULL, updated_at = ?
+        WHERE job_id = ? AND worker_id = ?
+        """, (now_str, job_id, worker_id))
+        affected = c.rowcount
+        conn.commit()
+        conn.close()
+        return affected > 0
+
+    def reclaim_stale_jobs(self, stale_threshold_seconds: int = 60) -> int:
+        """Reclaims jobs whose worker lease expired, resetting them for retry."""
+        now = datetime.now(timezone.utc)
+        now_str = now.isoformat()
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+        SELECT job_id, attempts, max_attempts FROM ingestion_jobs
+        WHERE status NOT IN ('COMPLETED', 'FAILED', 'SKIPPED', 'DUPLICATE')
+          AND lease_until IS NOT NULL
+          AND lease_until <= ?
+        """, (now_str,))
+        stale_rows = c.fetchall()
+        reclaimed = 0
+
+        for row in stale_rows:
+            job_id = row["job_id"]
+            attempts = row["attempts"]
+            max_attempts = row["max_attempts"]
+            if attempts >= max_attempts:
+                c.execute("""
+                UPDATE ingestion_jobs
+                SET status = 'FAILED', error_message = 'Worker lease expired and max attempts reached',
+                    worker_id = NULL, lease_until = NULL, updated_at = ?
+                WHERE job_id = ?
+                """, (now_str, job_id))
+            else:
+                c.execute("""
+                UPDATE ingestion_jobs
+                SET status = 'RETRY_PENDING',
+                    worker_id = NULL,
+                    lease_until = NULL,
+                    next_retry_at = ?,
+                    error_message = 'Worker lease expired; reclaimed for retry',
+                    updated_at = ?
+                WHERE job_id = ?
+                """, (now_str, now_str, job_id))
+            reclaimed += 1
+
+        conn.commit()
+        conn.close()
+        return reclaimed
+
+    def get_next_job(self, worker_id: str = "default_worker", lease_seconds: int = 60) -> Optional[IngestionJob]:
+        """Convenience method delegating to claim_job."""
+        return self.claim_job(worker_id=worker_id, lease_seconds=lease_seconds)
 
     def update_progress(self, job_id: str, stage: str, progress: float, checkpoint_stage: Optional[str] = None):
         now_str = datetime.now(timezone.utc).isoformat()
@@ -188,6 +283,7 @@ class IngestionQueue:
         }
 
     def _row_to_job(self, row) -> IngestionJob:
+        keys = row.keys() if hasattr(row, "keys") else []
         return IngestionJob(
             job_id=row["job_id"],
             source_id=row["source_id"],
@@ -199,6 +295,9 @@ class IngestionQueue:
             progress=row["progress"],
             checkpoint_stage=row["checkpoint_stage"],
             error_message=row["error_message"],
+            worker_id=row["worker_id"] if "worker_id" in keys else None,
+            lease_until=row["lease_until"] if "lease_until" in keys else None,
+            heartbeat_at=row["heartbeat_at"] if "heartbeat_at" in keys else None,
             created_at=row["created_at"],
             updated_at=row["updated_at"]
         )

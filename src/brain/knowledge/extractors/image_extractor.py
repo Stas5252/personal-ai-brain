@@ -5,11 +5,13 @@ Separates factual OCR from AI vision description and extracts EXIF metadata.
 import os
 import json
 from pathlib import Path
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from PIL import Image, ExifTags
 
 from src.brain.knowledge.extractors.base import BaseExtractor
 from src.brain.models.file_metadata import ExtractionResult, ExtractedElement
+from src.brain.knowledge.extractors.ocr_engine import OCREngine
+from src.brain.knowledge.extractors.vision_provider import get_vision_provider, VisionStatus
 from src.brain.config import GEMINI_API_KEY
 
 class ImageExtractor(BaseExtractor):
@@ -110,7 +112,7 @@ class ImageExtractor(BaseExtractor):
             )
 
     def _extract_ocr(self, path: Path) -> str:
-        """Extracts factual text from image (supporting sidecar or heuristics)."""
+        """Extracts factual text from image (supporting sidecar or on-device OCREngine)."""
         clean_stem = path.stem.split("_", 1)[-1] if "_" in path.stem else path.stem
         candidates = [
             path.with_suffix(path.suffix + ".ocr.txt"),
@@ -133,6 +135,14 @@ class ImageExtractor(BaseExtractor):
                             return f.read().strip()
                 except Exception:
                     pass
+
+        # Use on-device OCREngine
+        try:
+            ocr_res = OCREngine.get_instance().ocr_image(path)
+            if ocr_res and ocr_res.get("text"):
+                return ocr_res["text"].strip()
+        except Exception:
+            pass
 
         return ""
 
@@ -160,19 +170,17 @@ class ImageExtractor(BaseExtractor):
                 except Exception:
                     pass
 
-        # Default structured heuristic description
+        # Query live vision provider abstraction
+        provider = get_vision_provider()
+        if provider.is_available():
+            v_res = provider.analyze_image(path)
+            if v_res.status == VisionStatus.AVAILABLE and v_res.description:
+                return v_res.description, v_res.detected_objects, v_res.visual_tags
+
+        # Honest technical composition without fake regex hallucinations
         aspect = "горизонтальная" if width > height else ("вертикальная" if height > width else "квадратная")
-        desc = f"Композиция: {aspect} ориентация ({width}x{height} px). Визуальный план: студийный или выездной снимок фотографа."
-        objects = ["фотография", "визуальный контент"]
-        tags = ["визуал", "фото"]
-
-        if "moodboard" in path.name.lower() or "мудборд" in path.name.lower():
-            desc = "Мудборд фотосъемки: визуальные референсы, цветовая палитра, текстуры ткани и схемы позирования модели."
-            objects = ["мудборд", "референсы", "цветовая палитра", "модель"]
-            tags = ["мудборд", "стиль", "референсы", "палитра", "свет"]
-        elif "свет" in path.name.lower() or "light" in path.name.lower():
-            desc = "Схема освещения: расположение студийных источников света, софтбоксов и отражателей относительно модели."
-            objects = ["софтбокс", "студийный свет", "отражатель"]
-            tags = ["свет", "студия", "модификаторы"]
-
+        desc = f"Композиция: {aspect} ориентация ({width}x{height} px). [Vision analysis: NOT_IMPLEMENTED - live multimodal provider not connected]"
+        objects: List[str] = []
+        tags: List[str] = [aspect, f"{width}x{height}"]
         return desc, objects, tags
+

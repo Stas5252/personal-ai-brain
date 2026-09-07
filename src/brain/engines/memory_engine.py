@@ -245,22 +245,36 @@ class MemoryEngine:
         scored_mems = []
         now = datetime.now(timezone.utc)
         
+        DOMAIN_SYNONYMS = {
+            "объектив": {"объектив", "оптика", "линза", "стекло", "фокусное", "85mm", "50mm", "35mm", "24-70", "70-200"},
+            "оптика": {"объектив", "оптика", "линза", "стекло", "фокусное", "85mm", "50mm", "35mm"},
+            "свет": {"свет", "вспышка", "софтбокс", "рефлектор", "октобокс", "студийный"},
+            "портрет": {"портрет", "портрета", "портретной", "лицо"},
+            "цена": {"цена", "прайс", "пакет", "стоимость", "тариф"}
+        }
+
         for m in active_mems:
             mem_words = set(re.findall(r"\w+", m.content.lower()))
             
             # Semantic lexical relevance
             common = query_words.intersection(mem_words)
+            syn_hits = 0
+            for qw in query_words:
+                if qw in DOMAIN_SYNONYMS and DOMAIN_SYNONYMS[qw].intersection(mem_words):
+                    syn_hits += 1
+
             if not mem_words:
                 relevance = 0.0
             else:
-                relevance = len(common) / min(len(query_words), 10)
-                # Boost if exact phrase or high overlap
-                if any(w in query.lower() for w in ["стиль", "ответ", "как", "правило", "клиент", "цена"]):
+                base_len = len(common) + (syn_hits * 2)
+                relevance = base_len / min(max(len(query_words), 1), 10)
+                # Boost if exact phrase or high domain relevance
+                if re.search(r"\b(стиль|ответ|правило|клиент|цена|прайс)\b", query.lower()):
                     if m.type in [MemoryType.PREFERENCE, MemoryType.STYLE]:
                         relevance = max(relevance, 0.40)
                         
             # If query is completely unrelated, keep relevance low
-            if len(common) == 0 and m.type not in [MemoryType.PREFERENCE]:
+            if len(common) == 0 and syn_hits == 0 and m.type not in [MemoryType.PREFERENCE]:
                 relevance = 0.05
                 
             # Filter strictly irrelevant memories

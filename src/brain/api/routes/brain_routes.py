@@ -23,6 +23,9 @@ class ChatRequest(BaseModel):
     client_id: Optional[str] = None
     model: Optional[str] = None
     auto_admission: bool = True
+    conversation_history: Optional[List[Dict[str, Any]]] = None
+    images: Optional[List[str]] = None
+    audio_path: Optional[str] = None
 
 class MemoryCreateRequest(BaseModel):
     content: str
@@ -67,16 +70,10 @@ class OnboardingAnswerRequest(BaseModel):
     session_id: str
     answer: str
 
-# Optional Auth dependency
-def verify_token(authorization: Optional[str] = Header(None)):
-    # If authorization header provided, verify bearer token
-    if authorization:
-        parts = authorization.split()
-        if len(parts) == 2 and parts[0].lower() == "bearer":
-            token = parts[1]
-            if token != BRAIN_API_KEY and token != "valid-test-token":
-                raise HTTPException(status_code=401, detail="Invalid brain bearer token")
-    return True
+from src.brain.api.security import verify_brain_api_key
+
+# Mandatory Auth dependency
+verify_token = verify_brain_api_key
 
 # --- Endpoints ---
 @router.post("/chat", dependencies=[Depends(verify_token)])
@@ -86,7 +83,10 @@ def chat_endpoint(req: ChatRequest):
         project_id=req.project_id,
         client_id=req.client_id,
         preferred_model=req.model,
-        auto_admission=req.auto_admission
+        auto_admission=req.auto_admission,
+        conversation_history=req.conversation_history,
+        images=req.images,
+        audio_path=req.audio_path
     )
     return res
 
@@ -237,6 +237,26 @@ def answer_onboarding(req: OnboardingAnswerRequest):
         return res
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+@router.get("/profile", dependencies=[Depends(verify_token)])
+def get_user_profile():
+    prof = brain.profile_engine.get_profile()
+    return prof.model_dump()
+
+@router.post("/profile", dependencies=[Depends(verify_token)])
+def save_user_profile(prof: UserProfile):
+    updated = brain.profile_engine.save_profile(prof)
+    return updated.model_dump()
+
+@router.get("/clients", dependencies=[Depends(verify_token)])
+def list_clients():
+    from src.brain.db import get_connection
+    conn = get_connection()
+    c = conn.cursor()
+    c.execute("SELECT * FROM clients ORDER BY created_at DESC")
+    rows = c.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 @router.get("/traces", dependencies=[Depends(verify_token)])
 def get_traces(limit: int = 20):

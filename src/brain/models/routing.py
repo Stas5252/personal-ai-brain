@@ -19,11 +19,21 @@ class IntentType(str, Enum):
     MOODBOARD = "MOODBOARD"
     PROJECT = "PROJECT"
     KNOWLEDGE_SEARCH = "KNOWLEDGE_SEARCH"
+    VOICE = "VOICE"
+    OBJECTION = "OBJECTION"
+    COMPETITOR = "COMPETITOR"
+    TASK = "TASK"
+    DAILY_PLAN = "DAILY_PLAN"
 
 class RoutingDecision(BaseModel):
     primary_intent: IntentType
     secondary_intents: List[IntentType] = Field(default_factory=list)
+    compound_intents: List[str] = Field(default_factory=list)
     specialized_system_prompt: str = ""
     required_tools: List[str] = Field(default_factory=list)
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     reasoning: str = ""
+    missing_variables: List[str] = Field(default_factory=list)
+    clarifying_questions: List[str] = Field(default_factory=list)
+    workflow_suggested: Optional[str] = None
+    action_type: str = "DIRECT"

@@ -12,7 +12,7 @@ from src.brain.models.client import ClientStatus
 from src.brain.models.project import ProjectStatus
 from src.brain.services.brain_service import BrainService
 
-client = TestClient(app)
+client = TestClient(app, headers={"Authorization": "Bearer test-brain-key"})
 brain = BrainService()
 
 # -------------------------------------------------------------

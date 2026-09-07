@@ -146,6 +146,9 @@ CREATE TABLE IF NOT EXISTS ingestion_jobs (
     max_attempts INTEGER DEFAULT 3,           -- Maximum retry budget
     error TEXT,                               -- Last failure message
     step_checkpoint TEXT,                     -- Current pipeline stage (e.g. "extracting", "chunking", "embedding")
+    worker_id TEXT,                           -- Identifier of the active leasing worker
+    lease_until TIMESTAMP,                    -- Expiration timestamp of the current worker lease
+    heartbeat_at TIMESTAMP,                   -- Last heartbeat renewal timestamp
     scheduled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     started_at TIMESTAMP,
     finished_at TIMESTAMP,
