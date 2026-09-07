@@ -2,6 +2,7 @@ import pytest
 from src.brain.engines.shooting_engine import ShootingEngine
 from src.brain.engines.sales_engine import SalesEngine
 from src.brain.engines.agent_router import AgentRouter
+from src.brain.engines.content_engine import ContentEngine
 from src.brain.models.routing import IntentType
 from src.brain.models.profile import UserProfile
 from src.brain.services.brain_service import BrainService
@@ -15,6 +16,10 @@ class TestYaishkaDeepCapabilities:
     @pytest.fixture
     def sales_engine(self):
         return SalesEngine()
+
+    @pytest.fixture
+    def content_engine(self):
+        return ContentEngine()
 
     @pytest.fixture
     def router(self):
@@ -174,3 +179,166 @@ class TestYaishkaDeepCapabilities:
         assert res["response"] is not None
         assert len(res["response"]) > 0
         assert res["intent"] in [IntentType.MOODBOARD.value, IntentType.PHOTO.value]
+
+    # 10. Router Collisions & Workflow Enhancements
+    def test_router_collision_and_workflow_enhancements(self, router):
+        # Collision 1: 'цена' in 'сценарий'
+        dec_reels = router.route("Напиши сценарий для рилс про позирование")
+        assert dec_reels.primary_intent == IntentType.REELS
+        assert dec_reels.primary_intent != IntentType.PRICING
+
+        # Collision 2: 'свет' inside 'совет'
+        dec_advice = router.route("Посоветуй как ответить клиенту на вопрос о датах")
+        assert dec_advice.primary_intent != IntentType.PHOTO
+
+        # Objection keywords expansion
+        dec_husband = router.route("Клиентка говорит: надо посоветоваться с мужем")
+        assert dec_husband.primary_intent == IntentType.OBJECTION
+
+        dec_posing = router.route("Клиентка пишет: я деревянная как бревно и боюсь камеры")
+        assert dec_posing.primary_intent == IntentType.OBJECTION
+
+        # Force-majeure & cancellation
+        dec_cancel_ill = router.route("Клиентка заболела простудой, отмена съемки")
+        assert dec_cancel_ill.primary_intent == IntentType.DISPUTE
+        assert dec_cancel_ill.workflow_suggested == "cancellation_mediation"
+
+        dec_weather = router.route("На улице сильный ливень и дождь, перенос съемки")
+        assert dec_weather.primary_intent == IntentType.DISPUTE
+        assert dec_weather.workflow_suggested == "cancellation_mediation"
+
+        # Burnout crisis detection
+        dec_burnout = router.route("У меня выгорание, опускаются руки и нет сил снимать")
+        assert dec_burnout.workflow_suggested == "burnout_recovery"
+
+        # Photozone prototyping
+        dec_pz = router.route("Разработай концепт фотозоны для декоратора к осени")
+        assert dec_pz.workflow_suggested == "photozone_prototyping"
+
+        # Music selection discrimination
+        dec_photo_music = router.route("Фотосессия на природе под легкую фоновую музыку")
+        assert dec_photo_music.workflow_suggested != "music_selection"
+
+        dec_music_explicit = router.route("Подбери музыку для фотосессии в студии")
+        assert dec_music_explicit.workflow_suggested == "music_selection"
+
+    # 11. Multi-Objection Yaishka-Grade Handling (Husband & Fear of Posing)
+    def test_objection_handling_husband_and_posing(self, sales_engine):
+        # Partner / Husband objection
+        res_partner = sales_engine.handle_objection_yaishka_style(
+            objection_text="Мне очень нравится ваш стиль, но надо посоветоваться с мужем",
+            client_name="Анна",
+            use_llm=False
+        )
+        assert res_partner["objection_category"] == "partner"
+        assert "мудборд" in res_partner["client_message"] or "15–20 минут" in res_partner["client_message"]
+        assert "два" in res_partner["client_message"].lower()
+        assert "муж" in res_partner["methodological_advice"].lower()
+        assert "🤍" in res_partner["client_message"]
+
+        # Fear of posing objection
+        res_posing = sales_engine.handle_objection_yaishka_style(
+            objection_text="Я не умею позировать, я деревянная и всегда зажата на фото",
+            client_name="Ольга",
+            use_llm=False
+        )
+        assert res_posing["objection_category"] == "fear_of_posing"
+        assert "95%" in res_posing["client_message"]
+        assert "музык" in res_posing["client_message"].lower() or "кофе" in res_posing["client_message"].lower()
+        assert "расслабьтесь" in res_posing["methodological_advice"].lower()
+        assert "🤍" in res_posing["client_message"]
+
+    # 12. Cancellation & Reschedule Mediation (Weather, Illness, Late Cancellation)
+    def test_cancellation_and_reschedule_mediation(self, sales_engine):
+        # Weather
+        res_weather = sales_engine.handle_cancellation_and_reschedule(
+            cancellation_text="На улице сильный дождь и гроза, не сможем провести съемку на улице",
+            client_name="Мария",
+            use_llm=False
+        )
+        assert res_weather["cancellation_type"] == "weather"
+        assert "30–60" in res_weather["client_message"]
+        assert "студи" in res_weather["client_message"].lower()
+        assert "задаток" in res_weather["deposit_policy_explanation"].lower()
+        assert "🤍" in res_weather["client_message"]
+
+        # Illness
+        res_ill = sales_engine.handle_cancellation_and_reschedule(
+            cancellation_text="У ребенка поднялась высокая температура, мы заболели",
+            client_name="Елена",
+            use_llm=False
+        )
+        assert res_ill["cancellation_type"] == "illness"
+        assert "30–60" in res_ill["client_message"]
+        assert "здоровье" in res_ill["client_message"].lower()
+        assert "замороз" in res_ill["deposit_policy_explanation"].lower() or "сохраня" in res_ill["deposit_policy_explanation"].lower()
+
+        # Late cancellation
+        res_late = sales_engine.handle_cancellation_and_reschedule(
+            cancellation_text="У нас поменялись планы, отмените нашу бронь на выходные",
+            client_name="Наталья",
+            use_llm=False
+        )
+        assert res_late["cancellation_type"] == "late_cancellation"
+        assert "30–60" in res_late["client_message"]
+        assert "задаток" in res_late["client_message"].lower()
+
+    # 13. 9-Step Stories Arc (Yaishka Screen 05)
+    def test_nine_step_stories_arc(self, content_engine):
+        res = content_engine.generate_nine_step_stories_arc(
+            topic="Почему не нужно быть моделью для красивой фотосессии",
+            use_llm=False
+        )
+        assert len(res["steps"]) == 9
+        expected_names = [
+            "Вход", "Разворот", "Детали быта", "Интерактивный опрос",
+            "Мостик", "Реакция аудитории", "Философская мысль", "Экспертность", "Эфир/Оффер"
+        ]
+        for idx, step in enumerate(res["steps"]):
+            assert step["step_number"] == idx + 1
+            assert step["step_name"] == expected_names[idx]
+            assert len(step["visual"]) > 10
+            assert len(step["text_on_screen"]) > 10
+        assert res["steps"][3]["sticker"] is not None  # Interactive poll
+        assert res["steps"][8]["sticker"] is not None  # CTA
+        assert "9-ШАГОВАЯ АРКА STORIES" in res["formatted_script"]
+
+    # 14. Introvert Reels Script (Yaishka Screen 17)
+    def test_introvert_reels_script(self, content_engine):
+        res = content_engine.generate_introvert_reels_script(
+            topic="Страх камеры перед фотосессией",
+            duration_seconds=12,
+            use_llm=False
+        )
+        assert "Introvert" in res["format_type"]
+        assert len(res["b_roll_scenes"]) >= 3
+        for scene in res["b_roll_scenes"]:
+            assert "visual" in scene and "text_overlay" in scene
+        assert "sound_design" in res
+        assert "foley_effects" in res["sound_design"]
+        assert len(res["caption"]) > 30
+        assert "REELS ДЛЯ ИНТРОВЕРТА" in res["formatted_script"]
+
+    # 15. BrainService Workflow Integration & HEX Preservation
+    def test_brain_service_workflows_and_dual_card_integration(self):
+        brain = BrainService()
+
+        # 1. Partner Objection routed through BrainService
+        q_obj = "Клиентка Анна пишет: мне очень нравится ваше портфолио, но надо посоветоваться с мужем"
+        routing = brain.router.route(q_obj)
+        assert routing.primary_intent == IntentType.OBJECTION
+
+        # 2. Cancellation Mediation Workflow in routing
+        q_cancel = "Клиентка отменяет съемку из-за простуды и температуры"
+        r_cancel = brain.router.route(q_cancel)
+        assert r_cancel.workflow_suggested == "cancellation_mediation"
+
+        # 3. Burnout Recovery Workflow in routing
+        q_burnout = "У меня выгорание и творческий ступор, опускаются руки"
+        r_burnout = brain.router.route(q_burnout)
+        assert r_burnout.workflow_suggested == "burnout_recovery"
+
+        # 4. Photozone Prototyping Workflow in routing
+        q_photozone = "Сделай концепт фотозоны для декоратора"
+        r_photozone = brain.router.route(q_photozone)
+        assert r_photozone.workflow_suggested == "photozone_prototyping"

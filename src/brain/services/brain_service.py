@@ -212,51 +212,89 @@ class BrainService:
             angles = self.content_engine.emergency_content_recovery(profile=profile)
             a_lines = "\n".join([f"- {a['angle']} ({a['format']}): {a['hook']}" for a in angles])
             routing.specialized_system_prompt += f"\n\nСценарий 'Мне нечего выложить'. Предложи готовые ракурсы:\n{a_lines}"
+        elif routing.workflow_suggested == "cancellation_mediation":
+            import re
+            c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
+            c_name = c_name_match.group(1) if c_name_match else None
+            canc_res = self.sales_engine.handle_cancellation_and_reschedule(query, client_name=c_name, profile=profile)
+            routing.specialized_system_prompt += (
+                f"\n\n### ЭТАЛОННЫЙ РАЗБОР ОТМЕНЫ И ПЕРЕНОСА СЪЕМКИ (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"Тип ситуации: {canc_res.get('cancellation_type', 'отмена / перенос')}\n\n"
+                f"#### 1. Карточка «Сообщение клиентке»:\n"
+                f"{canc_res.get('client_message')}\n\n"
+                f"#### 2. Карточка «Политика задатка и переноса (30–60 дней)»:\n"
+                f"- {canc_res.get('deposit_policy_explanation')}\n"
+                f"- Методический совет фотографу: {canc_res.get('methodological_advice')}\n\n"
+                f"⛔ Чего категорически нельзя писать:\n{canc_res.get('what_not_to_say')}"
+            )
+        elif routing.workflow_suggested == "burnout_recovery":
+            routing.specialized_system_prompt += (
+                f"\n\n### АНТИКРИЗИСНЫЙ ПЛАН ВЫХОДА ИЗ ВЫГОРАНИЯ ДЛЯ ФОТОГРАФА (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"Оформи бережный 4-шаговый протокол восстановления творческой энергии:\n"
+                f"1. **Творческая съемка исключительно для себя**: выйти на прогулку с ОДНИМ фикс-объективом (например, 35mm или 50mm), без модели, без ТЗ и без обязательств.\n"
+                f"2. **Принцип нулевых ожиданий**: снимать только свет, тени, текстуры и случайные моменты — категорически запрещено оценивать результат и стремиться сделать шедевр.\n"
+                f"3. **Инфо-детокс и отписка от чужих лент**: на 3–5 дней уйти из соцсетей и перестать сравнивать свои бэкстейджи с чужим успехом.\n"
+                f"4. **Коммерческая пауза**: временно закрыть прием новых горящих заказов минимум на 7 дней, перенести несрочные дедлайны и дать себе право на отдых.\n\n"
+                f"Дай фотографу теплую человеческую поддержку без токсичного позитива."
+            )
+        elif routing.workflow_suggested == "photozone_prototyping":
+            pz_res = self.shooting_engine.prototype_photozone_concept(theme=query)
+            routing.specialized_system_prompt += (
+                f"\n\n### ПРОТОТИПИРОВАНИЕ ФОТОЗОНЫ И ПРЕДПРОДАЖИ (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"- Название: {pz_res.get('photozone_title')}\n"
+                f"- Пространство и свет: {pz_res.get('dimensions_and_light')}\n"
+                f"- Цветовая схема: {', '.join(pz_res.get('color_scheme', []))}\n"
+                f"- Ключевой реквизит: {', '.join(pz_res.get('key_props', []))}\n"
+                f"- Текст для предпродаж в блоге:\n{pz_res.get('presale_pitch_text')}\n"
+                f"- Промпт для генерации мокапа:\n`{pz_res.get('image_generation_prompt')}`"
+            )
         elif routing.workflow_suggested == "client_chat_analysis" or routing.primary_intent in [IntentType.SALES, IntentType.OBJECTION]:
             dialogue_analysis = self.sales_engine.analyze_client_dialogue(query)
             strat = dialogue_analysis.get('recommended_strategy', '')
             meaning = dialogue_analysis.get('what_client_really_means', '')
-            q_lower_check = query.lower()
-            if any(w in q_lower_check for w in ["дорого", "потян", "бюджет", "нет денег", "подума", "скидк"]):
-                import re
-                extracted_price = None
-                extracted_service = None
-                if profile:
-                    if getattr(profile, 'pricing', None) and isinstance(profile.pricing, dict):
-                        for k, v in profile.pricing.items():
-                            extracted_service = k
-                            nums = re.findall(r'\d+', str(v).replace(' ', ''))
-                            if nums:
-                                extracted_price = int(nums[0])
-                                break
-                    if not extracted_service and getattr(profile, 'services', None) and profile.services:
-                        extracted_service = profile.services[0]
+            resp_opts = dialogue_analysis.get('response_options', {})
+            what_not = dialogue_analysis.get('what_not_to_say', '')
 
-                c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
-                c_name = c_name_match.group(1) if c_name_match else None
+            import re
+            extracted_price = None
+            extracted_service = None
+            if profile:
+                if getattr(profile, 'pricing', None) and isinstance(profile.pricing, dict):
+                    for k, v in profile.pricing.items():
+                        extracted_service = k
+                        nums = re.findall(r'\d+', str(v).replace(' ', ''))
+                        if nums:
+                            extracted_price = int(nums[0])
+                            break
+                if not extracted_service and getattr(profile, 'services', None) and profile.services:
+                    extracted_service = profile.services[0]
 
-                yaishka_obj = self.sales_engine.handle_objection_yaishka_style(
-                    query,
-                    client_name=c_name,
-                    service=extracted_service,
-                    base_price=extracted_price
-                )
-                routing.specialized_system_prompt += (
-                    f"\n\n### ЭТАЛОННЫЙ ОТВЕТ НА ВОЗРАЖЕНИЕ (МЕТОДОЛОГИЯ СЕРВИСА «ЯИШКА»):\n"
-                    f"Обязательно раздели свой ответ на две чёткие карточки:\n\n"
-                    f"#### 1. Карточка «Сообщение клиентке»:\n"
-                    f"- Тёплая эмпатичная валидация чувств: покажи, что искренне понимаешь («понимаю вас, правда 🤍; когда съемку очень хочется, но бюджет сейчас не позволяет — это абсолютно нормально»).\n"
-                    f"- Ни в коем случае НЕ делай скидок на основной пакет (защищай ценность труда).\n"
-                    f"- Примени 'Правило двух выборов': предложи РОВНО ДВА комфортных варианта (мини-съёмка в более коротком формате [длительность, стоимость, сколько фото] ИЛИ сохранить основной формат с делением оплаты на 2 части / через сервис 'Долями').\n"
-                    f"- Оставь дверь открытой: «Посмотрите, какой вариант вам был бы удобнее. А если пока неактуально — оставайтесь со мной, я периодически делаю фотодни и короткие форматы 🤍».\n\n"
-                    f"#### 2. Карточка «Методический совет фотографу (Правило двух выборов)»:\n"
-                    f"- Объясни, почему важно дать ровно два выбора (не превращать сообщение в меню из 10 способов 'ну пожалуйста, купите').\n"
-                    f"- Как это сохраняет ценность основной съёмки и статус эксперта.\n"
-                    f"Готовый шаблон: {yaishka_obj.get('client_message')}\n"
-                    f"Методика: {yaishka_obj.get('methodological_advice')}"
-                )
-            else:
-                routing.specialized_system_prompt += f"\n\nДиагностика клиента: стадия {dialogue_analysis['detected_stage']}, возражения {dialogue_analysis['detected_objections']}. Что клиент имеет в виду: {meaning}. Стратегия: {strat}"
+            c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
+            c_name = c_name_match.group(1) if c_name_match else None
+
+            yaishka_obj = self.sales_engine.handle_objection_yaishka_style(
+                query,
+                client_name=c_name,
+                service=extracted_service,
+                base_price=extracted_price
+            )
+            routing.specialized_system_prompt += (
+                f"\n\n### ЭТАЛОННЫЙ ОТВЕТ НА ВОЗРАЖЕНИЕ (МЕТОДОЛОГИЯ СЕРВИСА «ЯИШКА»):\n"
+                f"Диагностика клиента: стадия {dialogue_analysis.get('detected_stage')}, возражения {dialogue_analysis.get('detected_objections')}. "
+                f"Что клиент имеет в виду: {meaning}. Стратегия: {strat}\n\n"
+                f"Обязательно раздели свой ответ на две чёткие карточки:\n\n"
+                f"#### 1. Карточка «Сообщение клиентке»:\n"
+                f"- Тёплая эмпатичная валидация чувств: покажи, что искренне понимаешь клиентку (понимаю вас, правда 🤍).\n"
+                f"- Ни в коем случае НЕ делай скидок на основной пакет (защищай ценность труда).\n"
+                f"- Готовый текст сообщения: {yaishka_obj.get('client_message')}\n\n"
+                f"#### 2. Карточка «Методический совет фотографу»:\n"
+                f"- Методика: {yaishka_obj.get('methodological_advice')}\n\n"
+                f"#### 3 варианта ответа для выбора:\n"
+                f"- Заботливый: {resp_opts.get('caring', '')}\n"
+                f"- Раскрывающий ценность: {resp_opts.get('value_focused', '')}\n"
+                f"- Альтернативный: {resp_opts.get('alternative', '')}\n\n"
+                f"⛔ Чего категорически нельзя писать:\n{what_not or yaishka_obj.get('what_not_to_say', '')}"
+            )
         elif routing.primary_intent == IntentType.DAILY_PLAN or routing.workflow_suggested == "daily_planning":
             plan = self.proactive_engine.generate_daily_plan(profile=profile)
             p_lines = "\n".join([f"Приоритет {p['priority_level']} [{p['domain']}]: {p['title']} — {p['action']}" for p in plan["priorities"]])
@@ -267,7 +305,8 @@ class BrainService:
         elif routing.primary_intent == IntentType.MOODBOARD or routing.workflow_suggested == "moodboard_creation":
             default_genre = (getattr(profile, "genres", None) and profile.genres[0]) or getattr(profile, "niche", "Семейная фотосессия") or "Семейная фотосессия"
             mb_card = self.shooting_engine.generate_moodboard_card(query, genre=default_genre)
-            routing.specialized_system_prompt += f"\n\nМудборд и подбор образов:\n- Концепт: {mb_card['concept']}\n- Палитра: {[c['name'] for c in mb_card['color_palette']]}\n- Сеты образов: {mb_card['outfit_combinations']}\n- Идеи кадров: {mb_card['framing_ideas']}\n- Важно: {mb_card['important_notes']}"
+            palette_desc = [f"{c['name']} ({c['hex']})" if 'hex' in c else c['name'] for c in mb_card['color_palette']]
+            routing.specialized_system_prompt += f"\n\nМудборд и подбор образов:\n- Концепт: {mb_card['concept']}\n- Палитра: {palette_desc}\n- Сеты образов: {mb_card['outfit_combinations']}\n- Идеи кадров: {mb_card['framing_ideas']}\n- Важно: {mb_card['important_notes']}"
         elif routing.primary_intent == IntentType.PROFILE_AUDIT or routing.workflow_suggested == "account_audit":
             audit_res = self.shooting_engine.audit_profile_and_grid(query, profile=profile)
             routing.specialized_system_prompt += f"\n\nАудит профиля и ленты:\n- Сильные стороны: {audit_res['strengths']}\n- Точки роста: {audit_res['growth_points']}\n- Навигация актуального: {audit_res['highlights_recommendation']}\n- Шахматный ритм ленты: {audit_res['grid_rhythm_advice']}\n- Шаги: {audit_res['action_steps']}"
@@ -306,7 +345,8 @@ class BrainService:
         elif routing.primary_intent == IntentType.PHOTO or routing.workflow_suggested == "shoot_preparation":
             default_genre = (getattr(profile, "genres", None) and profile.genres[0]) or (getattr(profile, "services", None) and profile.services[0]) or getattr(profile, "niche", "Портрет") or "Портрет"
             v_logic = self.shooting_engine.build_visual_logic(query, genre=default_genre)
-            routing.specialized_system_prompt += f"\n\nСхема света: {v_logic['light_scheme']['primary']}. Цветовая палитра: {[c['name'] for c in v_logic['color_palette']]}"
+            palette_desc = [f"{c['name']} ({c['hex']})" if 'hex' in c else c['name'] for c in v_logic['color_palette']]
+            routing.specialized_system_prompt += f"\n\nСхема света: {v_logic['light_scheme']['primary']}. Цветовая палитра: {palette_desc}"
 
         # 5. Retrieve relevant memories (scored)
         memories = self.memory_engine.retrieve_relevant_memories(

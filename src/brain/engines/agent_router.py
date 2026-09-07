@@ -5,7 +5,7 @@ from src.brain.models.routing import IntentType, RoutingDecision
 
 INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
     IntentType.PHOTO: [
-        "свет", "съемк", "камер", "объектив", "диафрагм", "выдержк", "iso", "портрет",
+        "фотосесси", "фотограф", "свет", "съемк", "камер", "объектив", "диафрагм", "выдержк", "iso", "портрет",
         "софтбокс", "рефлектор", "позирован", "ракурс", "кадр", "экспозици",
         "фокус", "вспышк", "студийный свет", "схема света", "октобокс"
     ],
@@ -25,7 +25,7 @@ INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
         "цена", "прайс", "пакет", "стоимость", "тариф", "сколько стоит", "чек", "расценк", "поднять цену", "ценообразование"
     ],
     IntentType.CLIENT: [
-        "клиент", "клиентк", "заказчик", "невеста", "модель", "девушк", "анна", "мария",
+        "клиент", "заказчик", "невеста", "модель", "девушк",
         "общение с клиентом", "бюджет клиента", "пожелания клиент", "переписка", "диалог"
     ],
     IntentType.PROJECT: [
@@ -39,14 +39,18 @@ INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
     IntentType.PROFILE_AUDIT: ["шапк", "аудит", "аккаунт", "профиль", "биографи", "оформлен", "визитк", "разбор аккаунта", "аудит ленты", "лента", "сетка", "хайлайтс", "актуальное", "шапка профиля"],
     IntentType.KNOWLEDGE_SEARCH: ["что такое", "объясни", "архив", "база знани", "по регламенту", "по инструкции", "согласно"],
     IntentType.VOICE: ["голосовое", "войс", "аудио", "надиктовал", "наговорил", "запись голоса", "расшифровка"],
-    IntentType.OBJECTION: ["дорого", "подумаем", "посоветуемся", "нашли дешевле", "позже", "не умеем позировать", "муж против"],
+    IntentType.OBJECTION: [
+        "дорого", "подумаем", "посоветуемся", "нашли дешевле", "позже", "не умеем позировать", "муж против",
+        "посовет", "муж", "партнер", "подума", "не уме", "позиров", "стесня", "боюсь камер", "бревно", "деревянн"
+    ],
     IntentType.COMPETITOR: ["конкурент", "другие фотографы", "отстроиться", "отстройка", "рынок", "анализ рынка"],
     IntentType.TASK: ["задач", "дедлайн", "создай задачу", "напомни", "контроль"],
     IntentType.DAILY_PLAN: ["что мне сегодня делать", "что делать", "план на день", "с чего начать", "приоритеты на сегодня"],
     IntentType.MUSIC: ["трек", "треки", "музык", "саундтрек", "подбор треков", "песня", "аудиодорожк", "фоновая музык"],
     IntentType.DISPUTE: [
         "спор", "конфликт", "спорная ситуация", "претензи", "недовольн", "требует исходник",
-        "докопал", "жалоб", "скандал", "разбор ситуации", "исходники raw", "отдать raw", "исходники", "не по договору"
+        "докопал", "жалоб", "скандал", "разбор ситуации", "исходники raw", "отдать raw", "исходники", "не по договору",
+        "отмен", "перенос", "заболе", "простуд", "погод", "дождь", "ливень", "форс-мажор"
     ]
 }
 
@@ -84,13 +88,36 @@ class AgentRouter:
         for intent, kws in INTENT_KEYWORDS.items():
             score = 0
             for kw in kws:
+                if kw == "цена":
+                    # Avoid collision inside "сценарий", "сцена"
+                    if re.search(r'(?<![а-яa-z0-9])цен[а-я]*', q_lower):
+                        score += 1
+                    continue
+                if kw == "свет":
+                    # Avoid collision inside "совет", "посовет", "просвет"
+                    if re.search(r'(?<![а-яa-z0-9])свет[а-я]*', q_lower):
+                        score += 1
+                    continue
                 if kw in q_lower:
                     weight = 2 if (len(kw) > 6 or " " in kw) else 1
                     score += weight
             if score > 0:
                 matched_scores[intent] = score
-        if any(w in q_lower for w in ["спорн", "конфликт", "претензи", "требует исходник", "отдать raw", "исходники raw"]):
+
+        if any(w in q_lower for w in [
+            "спорн", "конфликт", "претензи", "требует исходник", "отдать raw", "исходники raw",
+            "отмен", "перенос", "заболе", "простуд", "погод", "дождь", "ливень", "форс-мажор"
+        ]):
             matched_scores[IntentType.DISPUTE] = matched_scores.get(IntentType.DISPUTE, 0) + 10
+
+        is_burnout = any(w in q_lower for w in ["выгоран", "выгоре", "ступор", "кризис", "ничего не хочет", "нет сил", "опускаются руки"])
+        if is_burnout:
+            matched_scores[IntentType.GENERAL] = matched_scores.get(IntentType.GENERAL, 0) + 15
+
+        is_photozone = any(w in q_lower for w in ["фотозон", "декоратор"])
+        if is_photozone:
+            matched_scores[IntentType.PHOTO] = matched_scores.get(IntentType.PHOTO, 0) + 15
+
         if not matched_scores:
             return RoutingDecision(
                 primary_intent=IntentType.GENERAL,
@@ -107,6 +134,12 @@ class AgentRouter:
         workflow_suggested = None
         if "фотодень" in q_lower or "запустить фотодень" in q_lower:
             workflow_suggested = "photoday_launch"
+        elif is_burnout:
+            workflow_suggested = "burnout_recovery"
+        elif is_photozone:
+            workflow_suggested = "photozone_prototyping"
+        elif any(w in q_lower for w in ["отмен", "перенос", "заболе", "простуд", "дождь", "ливень", "форс-мажор"]):
+            workflow_suggested = "cancellation_mediation"
         elif "нечего выложить" in q_lower or "нет идей" in q_lower or "что выложить" in q_lower:
             workflow_suggested = "no_content_emergency"
         elif "переписк" in q_lower and ("клиент" in q_lower or "пропал" in q_lower or "дорого" in q_lower):
@@ -125,7 +158,7 @@ class AgentRouter:
             workflow_suggested = "moodboard_creation"
         elif primary == IntentType.DISPUTE or ("спор" in q_lower or "конфликт" in q_lower):
             workflow_suggested = "dispute_mediation"
-        elif primary == IntentType.MUSIC or ("трек" in q_lower or "музык" in q_lower):
+        elif primary == IntentType.MUSIC or any(w in q_lower for w in ["подбор трек", "подбери трек", "подборка трек", "треки для", "трек для"]) or bool(re.search(r'музык[а-я]* для|саундтрек[а-я]* к', q_lower)):
             workflow_suggested = "music_selection"
         missing_vars: List[str] = []
         clarifying_questions: List[str] = []
