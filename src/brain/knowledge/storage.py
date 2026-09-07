@@ -162,6 +162,30 @@ class StorageManager:
                 error_message=f"Unsupported file extension '{ext}'. Allowed: {sorted(list(ALLOWED_EXTENSIONS))}"
             )
 
+        # Check for in-progress downloads or incomplete files
+        name_lower = (original_filename or p.name).lower()
+        for marker in [".crdownload", ".part", ".tmp", ".downloading", ".incomplete"]:
+            if name_lower.endswith(marker):
+                return FileValidationResult(
+                    is_valid=False,
+                    error_message=f"File is currently downloading or incomplete ({marker})."
+                )
+
+        # Handle active file leasing or exclusive locks from downloading processes
+        try:
+            with open(p, "rb") as f_check:
+                f_check.read(1024)
+        except PermissionError as pe:
+            return FileValidationResult(
+                is_valid=False,
+                error_message=f"File is currently locked by another process (in-progress download or lease): {pe}"
+            )
+        except OSError as oe:
+            return FileValidationResult(
+                is_valid=False,
+                error_message=f"File access failed (possibly active download write): {oe}"
+            )
+
         file_size = p.stat().st_size
         if file_size <= 0:
             return FileValidationResult(is_valid=False, error_message="File is empty (0 bytes).")
@@ -229,14 +253,21 @@ class StorageManager:
         dest_path = prefix_dir / f"{sha256}_{safe_name}"
 
         if not dest_path.exists():
-            shutil.copy2(file_path, dest_path)
+            try:
+                os.link(file_path, dest_path)
+            except Exception:
+                shutil.copy2(file_path, dest_path)
 
         # Copy any companion sidecar files (.json) from source directory
         stem = file_path.stem
         for sc in file_path.parent.glob(f"{stem}*.json"):
             dest_sc = prefix_dir / sc.name
             try:
-                shutil.copy2(sc, dest_sc)
+                if not dest_sc.exists():
+                    try:
+                        os.link(sc, dest_sc)
+                    except Exception:
+                        shutil.copy2(sc, dest_sc)
             except Exception:
                 pass
 

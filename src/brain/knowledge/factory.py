@@ -32,7 +32,12 @@ class KnowledgeIngestionFactory:
     def __init__(
         self,
         storage_manager: Optional[StorageManager] = None,
-        vector_index: Optional[ChromaVectorIndex] = None
+        vector_index: Optional[ChromaVectorIndex] = None,
+        document_extractor: Optional[DocumentExtractor] = None,
+        image_extractor: Optional[ImageExtractor] = None,
+        audio_extractor: Optional[AudioExtractor] = None,
+        video_extractor: Optional[VideoExtractor] = None,
+        strict_mode: bool = True
     ):
         self.storage = storage_manager or StorageManager()
         self.embedding_provider = get_embedding_provider()
@@ -40,10 +45,16 @@ class KnowledgeIngestionFactory:
         self.hybrid_search = HybridSearchEngine(vector_index=self.vector_index)
 
         # Register modular extractors
-        self.document_extractor = DocumentExtractor()
-        self.image_extractor = ImageExtractor()
-        self.audio_extractor = AudioExtractor()
-        self.video_extractor = VideoExtractor(audio_extractor=self.audio_extractor)
+        if document_extractor is not None:
+            self.document_extractor = document_extractor
+        elif not strict_mode:
+            self.document_extractor = DocumentExtractor(strict_pages=False, skip_ocr_if_has_text=True)
+        else:
+            self.document_extractor = DocumentExtractor()
+
+        self.image_extractor = image_extractor or ImageExtractor()
+        self.audio_extractor = audio_extractor or AudioExtractor()
+        self.video_extractor = video_extractor or VideoExtractor(audio_extractor=self.audio_extractor)
 
         self.classifier = LayerClassifier()
         self.chunker = StructureChunker()

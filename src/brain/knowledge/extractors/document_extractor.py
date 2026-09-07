@@ -17,7 +17,8 @@ class DocumentExtractor(BaseExtractor):
     SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html", ".htm"}
 
     def __init__(self, ocr_engine=None, max_pdf_pages: int = 2000,
-                 max_render_pixels: int = 20_000_000, min_ocr_confidence: float = 0.5):
+                 max_render_pixels: int = 20_000_000, min_ocr_confidence: float = 0.5,
+                 strict_pages: bool = True, skip_ocr_if_has_text: bool = False):
         if max_pdf_pages <= 0 or max_render_pixels <= 0:
             raise ValueError("PDF limits must be positive")
         if not 0 <= min_ocr_confidence <= 1:
@@ -26,17 +27,19 @@ class DocumentExtractor(BaseExtractor):
         self.max_pdf_pages = max_pdf_pages
         self.max_render_pixels = max_render_pixels
         self.min_ocr_confidence = min_ocr_confidence
+        self.strict_pages = strict_pages
+        self.skip_ocr_if_has_text = skip_ocr_if_has_text
 
     def can_handle(self, extension: str, mime_type: str) -> bool:
         return extension.lower() in self.SUPPORTED_EXTS
 
-    @staticmethod
-    def _result(source_id, elements, info, page_count=None, error=None):
+    def _result(self, source_id, elements, info, page_count=None, error=None):
         elements = [e for e in elements if e.content.strip()]
-        return ExtractionResult(source_id=source_id, success=bool(elements) and error is None,
+        is_success = bool(elements) and (error is None or not self.strict_pages)
+        return ExtractionResult(source_id=source_id, success=is_success,
                                 elements=elements, raw_text="\n\n".join(e.content for e in elements),
                                 page_count=page_count, media_info=info,
-                                error_message=error or (None if elements else "Document contains no usable text"))
+                                error_message=error if not is_success else None)
 
     def extract(self, file_path: Path, source_id: str = "default_source",
                 derived_dir: Optional[Path] = None) -> ExtractionResult:
@@ -74,6 +77,10 @@ class DocumentExtractor(BaseExtractor):
             count = len(document)
             if count > self.max_pdf_pages:
                 raise ValueError("PDF exceeds configured page limit")
+            has_native_text = False
+            if self.skip_ocr_if_has_text:
+                has_native_text = any(bool(document[i].get_text().strip()) for i in range(min(count, 15)))
+
             with tempfile.TemporaryDirectory(prefix="pdf-", dir=derived_dir) as scratch:
                 for index in range(count):
                     number = index + 1
@@ -88,6 +95,9 @@ class DocumentExtractor(BaseExtractor):
                             continue
                         if not page.get_images() and not page.get_drawings():
                             reports.append({"page": number, "status": "BLANK"})
+                            continue
+                        if self.skip_ocr_if_has_text and (has_native_text or elements):
+                            reports.append({"page": number, "status": "VISUAL_SKIPPED"})
                             continue
                         engine = self._ocr if self._ocr is not None else OCREngine.get_instance()
                         if not engine.is_available:
@@ -226,6 +236,60 @@ class DocumentExtractor(BaseExtractor):
     def _extract_html(self, path: Path, source_id: str) -> ExtractionResult:
         from bs4 import BeautifulSoup, NavigableString
         soup = BeautifulSoup(path.read_bytes(), "html.parser")
+
+        # Handle Telegram Desktop export HTML (e.g. messages.html, messages2.html)
+        history = soup.find("div", class_="history")
+        if history:
+            tg_elements = []
+            title_tag = soup.find("div", class_="text bold")
+            chat_title = title_tag.get_text(" ", strip=True) if title_tag else (soup.title.get_text(" ", strip=True) if soup.title else path.stem)
+
+            msgs = history.find_all("div", class_="message")
+            for m in msgs:
+                classes = m.get("class", [])
+                if "service" in classes:
+                    continue
+                text_div = m.find("div", class_="text")
+                text = text_div.get_text(" ", strip=True) if text_div else ""
+
+                media_links = []
+                for a in m.find_all("a"):
+                    href = a.get("href", "")
+                    if any(href.startswith(pref) for pref in ["files/", "video_files/", "voice_messages/", "photos/"]):
+                        media_links.append(href)
+
+                if not text and not media_links:
+                    continue
+
+                date_div = m.find("div", class_="date")
+                date_str = date_div.get("title", "") if date_div else ""
+
+                first_line = text.split("\n")[0].split(". ")[0].strip() if text else "Прикрепленные материалы"
+                if len(first_line) > 80:
+                    first_line = first_line[:77] + "..."
+                msg_heading = f"{chat_title} > {first_line}" if first_line else chat_title
+
+                msg_content = text
+                if media_links:
+                    media_str = "\nПрикрепленные материалы к уроку: " + ", ".join(media_links)
+                    msg_content = (msg_content + "\n" + media_str).strip() if msg_content else media_str.strip()
+
+                tg_elements.append(ExtractedElement(
+                    element_type="paragraph",
+                    content=msg_content,
+                    heading_path=msg_heading,
+                    metadata={"date": date_str, "message_id": m.get("id"), "media": media_links}
+                ))
+
+            if tg_elements:
+                return self._result(source_id, tg_elements, {
+                    "format": "HTML_TELEGRAM_EXPORT",
+                    "title": chat_title,
+                    "messages_count": len(tg_elements),
+                    "content_coverage": "TELEGRAM_MESSAGES_AND_MEDIA_REFS",
+                    "conversation_structure_preserved": True
+                })
+
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript", "svg"]):
             tag.decompose()
         title = soup.title.get_text(" ", strip=True) if soup.title else path.stem

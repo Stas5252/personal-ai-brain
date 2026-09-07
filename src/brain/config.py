@@ -69,7 +69,7 @@ for _dir in [STORAGE_DIR, ORIGINALS_DIR, DERIVED_DIR, VECTOR_DB_DIR]:
     _dir.mkdir(parents=True, exist_ok=True)
 
 # Security and limits
-MAX_FILE_SIZE_BYTES = int(os.environ.get("MAX_FILE_SIZE_BYTES", str(100 * 1024 * 1024))) # 100 MB
+MAX_FILE_SIZE_BYTES = int(os.environ.get("MAX_FILE_SIZE_BYTES", str(10 * 1024 * 1024 * 1024))) # 10 GB
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html"}
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif"}
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
