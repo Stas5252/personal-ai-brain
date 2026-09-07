@@ -23,6 +23,6 @@ def verify_brain_api_key(
         parts = authorization.split()
         token = parts[1] if len(parts) == 2 and parts[0].lower() == 'bearer' else ''
     if not token or not hmac.compare_digest(token.encode(), expected.encode()):
-        raise HTTPException(status_code=401, detail='Authentication required.',
+        raise HTTPException(status_code=401, detail='Invalid brain bearer token or authentication required.',
                             headers={'WWW-Authenticate': 'Bearer'})
     return True

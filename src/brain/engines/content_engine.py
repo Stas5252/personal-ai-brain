@@ -17,10 +17,10 @@ class ContentEngine:
         if "reel" in fmt or "рилс" in fmt:
             return ("ФОРМАТ: REELS\n1. ХУК (0-3 сек)\n2. ВИЗУАЛЬНЫЙ РЯД\n3. ТЕКСТ НА ЭКРАНЕ\n4. ГОЛОСОВОЙ ТЕКСТ\n5. АУДИО\n6. ОПИСАНИЕ И CTA")
         if "stori" in fmt or "сторис" in fmt:
-            return ("ФОРМАТ: СЕРИЯ STORIES\nКадр 1: контекст\nКадр 2: развитие\nКадр 3: результат\nКадр 4: польза\nКадр 5: интерактив и CTA")
+            return ("ФОРМАТ: СЕРИЯ STORIES\nКадр 1: контекст\nКадр 2: развитие\nКадр 3 (Кульминация): результат\nКадр 4: польза\nКадр 5: интерактив и CTA")
         if "telegram" in fmt or "тг" in fmt or "канал" in fmt:
-            return "ФОРМАТ: TELEGRAM-ПОСТ\nЗаголовок, личная интонация, мысль или кейс, вопрос для обсуждения."
-        return "ФОРМАТ: ЭКСПЕРТНЫЙ / СТОРИТЕЛЛИНГ ПОСТ\nХук, история или боль клиента, вывод, естественный CTA."
+            return "ФОРМАТ: TELEGRAM-ПОСТ\nЗаголовок жирным, личная интонация, мысль или кейс, вопрос для обсуждения."
+        return "ФОРМАТ: ЭКСПЕРТНЫЙ / СТОРИТЕЛЛИНГ ПОСТ\nЦЕПЛЯЮЩИЙ ХУК, ТЕЛО ПОСТА (история или боль клиента), вывод, CTA."
 
     @staticmethod
     def _evidence_note(value: str, label: str) -> str:
@@ -61,7 +61,7 @@ class ContentEngine:
                 code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.7)
                 if code == 200:
                     clean = text.strip()
-                    if clean.startswith("``"):
+                    if clean.startswith("```"):
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                     parsed = json.loads(clean)
                     if isinstance(parsed, list) and len(parsed) >= 3 and all(isinstance(x, dict) for x in parsed[:3]):
@@ -78,13 +78,22 @@ class ContentEngine:
         else:
             first_hook = "Что помогает человеку расслабиться перед камерой"
             first_theme = "Практический рассказ без выдуманных цифр и чужих результатов"
+
+        if recent_projects and len(recent_projects) > 1:
+            project_2 = recent_projects[1]
+            second_hook = f"Один источник света, несколько настроений: проект «{project_2.get('name', 'без названия')}»"
+            second_theme = f"Разбор приёма и решений: {project_2.get('description') or 'по материалам съёмки'} для жанра {genres}."
+        else:
+            second_hook = "Один источник света, несколько настроений"
+            second_theme = f"Разбор приёма для жанра {genres}; оборудование и результат нужно подтвердить по материалам съёмки."
+
         return [
-            {"angle": "Сторителлинг и доверие", "format": "Личный пост + кадры", "hook": first_hook,
+            {"angle": "Сторителлинг & Доверие", "format": "Личный пост + кадры", "hook": first_hook,
              "theme": first_theme, "cta": "Напишите, какая часть подготовки к съёмке для вас самая сложная."},
-            {"angle": "Экспертиза и закулисье", "format": "Reels / backstage", "hook": "Один источник света, несколько настроений",
-             "theme": f"Разбор приёма для жанра {genres}; оборудование и результат нужно подтвердить по материалам съёмки.",
+            {"angle": "Экспертиза & Закулисье", "format": "Reels / backstage", "hook": second_hook,
+             "theme": second_theme,
              "cta": "Сохраните идею и адаптируйте её под своё оборудование."},
-            {"angle": "Мягкая продажа без выдуманных обещаний", "format": "Stories + пост",
+            {"angle": "Мягкие продажи & Сезонный оффер", "format": "Stories + пост",
              "hook": f"Как подготовиться к {service} в {current_season}",
              "theme": "Покажите реальное предложение, цены и доступность только после проверки действующего прайса и календаря.",
              "cta": "Напишите, чтобы получить актуальные условия и проверить свободные даты."},

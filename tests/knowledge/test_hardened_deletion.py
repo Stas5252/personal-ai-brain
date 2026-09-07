@@ -15,7 +15,9 @@ from src.brain.knowledge.embeddings.implementations import get_embedding_provide
 
 @pytest.fixture
 def client():
-    return TestClient(app, headers={"Authorization": "Bearer test-brain-key"})
+    import os
+    key = os.environ.get('BRAIN_API_KEY', 'regression-only-not-a-production-key-0001')
+    return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 @pytest.fixture
 def factory():

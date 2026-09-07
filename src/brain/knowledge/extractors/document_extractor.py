@@ -179,16 +179,20 @@ class DocumentExtractor(BaseExtractor):
         for number, slide in enumerate(presentation.slides, 1):
             title = slide.shapes.title.text.strip() if slide.shapes.title is not None else ""
             texts = [part for part in parts(slide.shapes) if part]
+            notes = ""
             if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
                 notes = slide.notes_slide.notes_text_frame.text.strip()
-                if notes:
-                    texts.append("Заметки спикера:\n" + notes)
-            if not texts:
+            if not texts and not notes:
                 empty_slides.append(number)
                 continue
-            elements.append(ExtractedElement(element_type="slide", content="\n".join(texts),
-                                             slide_number=number, heading_path=title or f"Слайд {number}",
-                                             metadata={"visual_content_analyzed": False}))
+            if texts:
+                elements.append(ExtractedElement(element_type="slide", content="\n".join(texts),
+                                                 slide_number=number, heading_path=title or f"Слайд {number}",
+                                                 metadata={"visual_content_analyzed": False}))
+            if notes:
+                elements.append(ExtractedElement(element_type="speaker_notes", content=notes,
+                                                 slide_number=number, heading_path=title or f"Слайд {number}",
+                                                 metadata={"visual_content_analyzed": False}))
         return self._result(source_id, elements, {"format": "PPTX", "slides": len(presentation.slides),
                            "slides_without_text": empty_slides, "visual_content_analyzed": False,
                            "content_coverage": "TEXT_TABLES_AND_NOTES_ONLY"}, len(presentation.slides))

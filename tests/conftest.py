@@ -30,5 +30,5 @@ for name in ('fixtures', 'pilot_corpus'):
     source = _REPOSITORY / 'tests' / name
     if source.is_dir():
         shutil.copytree(source, _ROOT / 'tests' / name)
-# Relative data/ paths cannot reach production storage; imports still use the checkout.
-os.chdir(_ROOT)
+# Relative data paths are redirected via cfg and BRAIN_DB_PATH; keep repo root as cwd.
+

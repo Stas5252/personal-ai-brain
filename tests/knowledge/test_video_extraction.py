@@ -6,11 +6,32 @@ import pytest
 from pathlib import Path
 from src.brain.knowledge.extractors.video_extractor import VideoExtractor
 from src.brain.knowledge.extractors.audio_extractor import AudioExtractor
-from src.brain.models.file_metadata import ExtractionResult, VideoMetadata
+from src.brain.models.file_metadata import ExtractionResult, ExtractedElement, VideoMetadata
+
+class ManifestAudioDouble:
+    def extract(self, wav_path, source_id, derived_dir):
+        return ExtractionResult(
+            source_id=source_id,
+            success=True,
+            elements=[
+                ExtractedElement(
+                    element_type="transcript_segment",
+                    content="Привет всем! Сегодня мы разберем жесткий свет и использование рефлектора с сотами.",
+                    start_time=0.0,
+                    end_time=3.0
+                ),
+                ExtractedElement(
+                    element_type="transcript_segment",
+                    content="Обратите внимание на четкую границу светотени на модели.",
+                    start_time=3.0,
+                    end_time=6.0
+                )
+            ]
+        )
 
 @pytest.fixture
 def video_extractor():
-    return VideoExtractor(audio_extractor=AudioExtractor())
+    return VideoExtractor(audio_extractor=ManifestAudioDouble())
 
 
 def test_video_metadata_ffprobe(video_extractor):

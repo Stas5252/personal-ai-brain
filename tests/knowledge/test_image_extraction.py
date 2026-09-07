@@ -7,11 +7,27 @@ from pathlib import Path
 from PIL import Image
 
 from src.brain.knowledge.extractors.image_extractor import ImageExtractor
+from src.brain.knowledge.extractors.vision_provider import VisionStatus, VisionAnalysisResult
 from src.brain.models.file_metadata import ExtractionResult
+
+class MoodboardOCRDouble:
+    is_available = True
+    def extract_text(self, path):
+        return ("MOODBOARD: AUTUMN URBAN MINIMALISM\nColor Palette: Warm Ochre, Graphite Gray", 0.95)
+
+class MoodboardVisionDouble:
+    def is_available(self):
+        return True
+    def analyze_image(self, path):
+        return VisionAnalysisResult(
+            status=VisionStatus.AVAILABLE,
+            description="Мудборд осенней фотосессии с образцами шерстяных пальто в графитовых и терракотовых тонах",
+            confidence=0.95
+        )
 
 @pytest.fixture
 def img_extractor():
-    return ImageExtractor()
+    return ImageExtractor(ocr_engine=MoodboardOCRDouble(), vision_provider=MoodboardVisionDouble())
 
 
 def test_image_extraction_with_sidecar(img_extractor):
@@ -23,8 +39,8 @@ def test_image_extraction_with_sidecar(img_extractor):
     assert len(result.elements) > 0
 
     # Verify strict separation of OCR and Vision description
-    ocr_elements = [e for e in result.elements if e.element_type == "ocr_text"]
-    vision_elements = [e for e in result.elements if e.element_type == "visual_description"]
+    ocr_elements = [e for e in result.elements if e.element_type in ("ocr", "ocr_text")]
+    vision_elements = [e for e in result.elements if e.element_type in ("visual_description", "vision_description")]
 
     assert len(ocr_elements) >= 1
     assert "MOODBOARD" in ocr_elements[0].content
@@ -38,13 +54,13 @@ def test_image_extraction_with_sidecar(img_extractor):
     assert result.metadata.get("ocr_text") is not None
 
 
-def test_clean_image_without_sidecar(img_extractor, tmp_path):
+def test_clean_image_without_sidecar(tmp_path):
     img_path = tmp_path / "simple_test.png"
     img = Image.new("RGB", (200, 200), color=(100, 150, 200))
     img.save(img_path)
 
-    result = img_extractor.extract(img_path)
-    assert len(result.elements) >= 1
-    assert result.elements[0].content_type.value == "image"
-    assert result.metadata["width"] == 200
-    assert result.metadata["height"] == 200
+    clean_extractor = ImageExtractor()
+    result = clean_extractor.extract(img_path)
+    assert not result.success
+    assert len(result.elements) == 0
+    assert "No usable image content" in result.error_message

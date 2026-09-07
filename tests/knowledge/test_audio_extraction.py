@@ -9,7 +9,7 @@ from src.brain.models.file_metadata import ExtractionResult
 
 @pytest.fixture
 def audio_extractor():
-    return AudioExtractor()
+    return AudioExtractor(allow_sidecar=True)
 
 
 def test_audio_normalization_ffmpeg(audio_extractor, tmp_path):

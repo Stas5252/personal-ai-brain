@@ -12,7 +12,9 @@ from src.brain.models.client import ClientStatus
 from src.brain.models.project import ProjectStatus
 from src.brain.services.brain_service import BrainService
 
-client = TestClient(app, headers={"Authorization": "Bearer test-brain-key"})
+import os
+_auth_key = os.environ.get('BRAIN_API_KEY', 'regression-only-not-a-production-key-0001')
+client = TestClient(app, headers={"Authorization": f"Bearer {_auth_key}"})
 brain = BrainService()
 
 # -------------------------------------------------------------

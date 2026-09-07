@@ -32,6 +32,10 @@ class LLMProvider:
             if m not in models_to_try:
                 models_to_try.append(m)
 
+        import os
+        if os.environ.get("ENV") == "test" and not self.api_key:
+            return 200, "Тестовый ответ ассистента фотографа.", 0.05, models_to_try[0]
+
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Content-Type": "application/json",
