@@ -123,7 +123,10 @@ class AgentRouter:
         if is_photozone:
             matched_scores[IntentType.PHOTO] = matched_scores.get(IntentType.PHOTO, 0) + 15
 
-        is_introvert_reels = ("интроверт" in q_lower or "без лица" in q_lower or "без говорящей головы" in q_lower or "b-roll" in q_lower) and any(w in q_lower for w in ["reels", "рилс", "ролик", "видео"])
+        is_introvert_reels = any(w in q_lower for w in [
+            "интроверт", "без лица", "без говорящей головы", "b-roll", "стесня",
+            "не хочет говорит", "не хочу говорит", "боится говорит", "боюсь говорит", "не говорит", "молчалив"
+        ]) and any(w in q_lower for w in ["reels", "рилс", "ролик", "видео", "сценари"])
         is_stories_arc = any(w in q_lower for w in ["арк", "9", "яишк", "прогрев", "шагов", "сценари"]) and any(w in q_lower for w in ["сторис", "stories", "сториз"])
 
         if is_stories_arc:
