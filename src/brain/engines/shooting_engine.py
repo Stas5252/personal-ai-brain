@@ -388,3 +388,396 @@ class ShootingEngine:
             critique_prompt += f"\nВопрос автора кадра: «{user_question}»\nОтветь на него с точки зрения профессионального фотобизнеса."
 
         return self.critique_shot(image_path, prompt=critique_prompt)
+
+    def audit_profile_and_grid(
+        self,
+        target: str,
+        profile: Optional[UserProfile] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Multimodal audit of a photographer's social profile, bio, highlights, and grid rhythm.
+        Matches Yaishka screen 03 (Account & Grid Audit).
+        Accepts either an image path (screenshot of profile/grid) or text description.
+        """
+        from pathlib import Path
+        visual_context = ""
+        try:
+            cleaned = target.strip().strip('"').strip("'")
+            p_img = Path(cleaned)
+            if p_img.is_file() and p_img.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp"]:
+                audit_vision_prompt = (
+                    "Ты — арт-директор и ведущий аудитор профилей фотографов в соцсетях.\n"
+                    "Внимательно изучи скриншот профиля/ленты фотографа:\n"
+                    "1. Прочитай весь текст шапки: ник, имя, ниша, город, ключевые факты (УТП, опыт, ссылки).\n"
+                    "2. Посмотри на закрепленные посты (Pinned).\n"
+                    "3. Изучи названия обложек в «Актуальном» (Highlights).\n"
+                    "4. Оцени сетку публикаций (ленту): крупность планов (дальний, средний, макро-детали), чередование света и гармонию.\n"
+                    "5. Проявленность личного бренда (лицо автора, бэкстейдж или только безликие фото).\n"
+                    "Опиши подробно всё увиденное для профессионального разбора."
+                )
+                v_res = self.critique_shot(str(p_img), prompt=audit_vision_prompt)
+                if v_res.get("status") == "AVAILABLE" and v_res.get("description"):
+                    visual_context = f"Анализ скриншота через Gemini Vision:\n{v_res['description']}"
+        except Exception:
+            pass
+
+        content_to_audit = visual_context or target
+
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                author_name = (profile and profile.identity) or "коллега"
+                city_niche = f"Город: {profile.city or 'не указан'}, Ниша: {profile.niche or 'фотография'}." if profile else ""
+                prompt = (
+                    f"Ты — профессиональный арт-директор и наставник фотографов, как в сервисе «Яишка».\n"
+                    f"Проведи комплексный аудит профиля и ленты фотографа ({author_name}. {city_niche}):\n"
+                    f"«««\n{content_to_audit}\n»»»\n\n"
+                    "Сделай структурированный разбор точно по методологии Яишки:\n"
+                    "1. Введение: дружелюбное обращение по имени, общий вердикт.\n"
+                    "2. Ниша и данные: ниша, география, ключевые факты шапки (УТП, сроки отдачи, ссылки).\n"
+                    "3. Сильные стороны: что уже работает отлично (витрина из закрепленных постов, личный бренд, эстетика).\n"
+                    "4. Точки роста:\n"
+                    "   - Визуальный ритм ленты: как соседствуют кадры, нет ли каши по свету и крупности.\n"
+                    "   - Навигация: названия обложек в «Актуальном» (предложи заменить загадочные/абстрактные названия на четкие конвертящие теги: «Прайс», «Отзывы», «Образы / Советы», «Локации»).\n"
+                    "   - Управление «Ритмом» в ленте: шахматный порядок чередования планов (Дальний план / Средний план / Макро-деталь).\n"
+                    "5. Три главных шага для внедрения уже сегодня.\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    '  "niche_and_geo": "описание ниши и города",\n'
+                    '  "bio_assessment": "оценка шапки профиля и УТП",\n'
+                    '  "strengths": ["сильная сторона 1", "сильная сторона 2"],\n'
+                    '  "growth_points": ["точка роста 1", "точка роста 2"],\n'
+                    '  "highlights_recommendation": "как переименовать актуальное",\n'
+                    '  "grid_rhythm_advice": "рекомендация по шахматному чередованию планов (дальний, средний, макро)",\n'
+                    '  "action_steps": ["шаг 1", "шаг 2", "шаг 3"],\n'
+                    '  "full_formatted_audit": "готовый красивый текст разбора с эмодзи и абзацами в стиле Яишки"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "grid_rhythm_advice" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
+        # Fallback Yaishka-grade audit
+        author_name = (profile and profile.identity) or "коллега"
+        niche = (profile and profile.niche) or "портретная и семейная фотография"
+        city = (profile and profile.city) or "вашем городе"
+        formatted_audit = (
+            f"{author_name}, вижу профиль целиком, и картина гораздо яснее. Давай разберем, что у тебя сейчас работает на ура, а где есть точки роста.\n\n"
+            f"• Ниша: {niche}\n"
+            f"• География: {city}\n"
+            f"• Шапка профиля: важно, чтобы за первые 3 секунды клиент видел УТП (например, готовность фото за 24-48 часов или помощь с образами) и прямую ссылку для связи.\n\n"
+            f"✨ Сильные стороны:\n"
+            f"• Отличная «витрина» из закрепленных постов (Pinned). Это позволяет оценить твой уровень работ без долгого скроллинга.\n"
+            f"• Проявленность автора: живые бэкстейджи и искренние кадры создают доверие намного сильнее безликих лент.\n\n"
+            f"🎯 Точки роста:\n"
+            f"• Визуальный ритм ленты: когда рядом стоят средние планы с разной температурой света, лента спорит сама с собой.\n"
+            f"• Навигация в «Актуальном»: замени абстрактные заголовки на понятные теги — «Прайс», «Отзывы», «Образы», «Обо мне».\n"
+            f"• Управление «Ритмом» (шахматный порядок): чередуй планы по крупности:\n"
+            f"   1. Дальний план (атмосфера, локация, воздух)\n"
+            f"   2. Средний план (герой, действие, эмоция)\n"
+            f"   3. Макро-деталь (руки, кольца, цветы, фактура ткани)\n\n"
+            f"Такой шахматный порядок сделает ленту визуально спокойной и дорогой!"
+        )
+        return {
+            "niche_and_geo": f"{niche}, {city}",
+            "bio_assessment": "Шапка профиля требует четкого УТП и прямой ссылки в мессенджер.",
+            "strengths": ["Закрепленные посты дают понимание эстетики", "Наличие живых кадров формирует доверие"],
+            "growth_points": ["Хаотичное чередование планов в ленте", "Неочевидные названия в актуальном"],
+            "highlights_recommendation": "Переименовать в теги: «Прайс», «Отзывы», «Образы / Советы», «Локации».",
+            "grid_rhythm_advice": "Внедрить шахматный порядок крупности: Дальний (воздух) -> Средний (герой) -> Макро-деталь (руки/декор).",
+            "action_steps": [
+                "Переименовать хайлайтс в понятные для клиента категории",
+                "Разбавить ленту макро-деталями и кадрами с воздухом",
+                "Закрепить в топ 3 лучших разноплановых серии"
+            ],
+            "full_formatted_audit": formatted_audit
+        }
+
+    def generate_moodboard_card(
+        self,
+        concept_title: str,
+        genre: str = "Семейная фотосессия",
+        location: str = "природная локация или студия",
+        season: str = "текущий сезон",
+        people_type: str = "семья",
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Generates a complete Yaishka visual moodboard & wardrobe lookbook card.
+        Matches Yaishka screen 02 & 10 (Color palette, 7 outfit combinations, location, 5 framing ideas, "Важно ♡").
+        """
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — элитный арт-директор и стилист съёмок сервиса «Яишка».\n"
+                    f"Создай эталонный мудборд и подборку образов для съёмки:\n"
+                    f"- Концепция: '{concept_title}'\n"
+                    f"- Жанр: '{genre}'\n"
+                    f"- Локация: '{location}'\n"
+                    f"- Сезон: '{season}', Участники: '{people_type}'\n\n"
+                    "Сформируй карточку мудборда строго по стандартам Яишки:\n"
+                    "1. Заголовок и поэтичный подзаголовок (например: «МУДБОРД: СЕМЕЙНАЯ СЪЕМКА В ЛЕСУ. Про теплые объятия, смех, прогулки...»).\n"
+                    "2. Палитра: ровно 5 гармоничных цветов с красивыми названиями и HEX-кодами.\n"
+                    "3. Примеры сочетаний образов: ровно 7 готовых сетов одежды (комбинации из 2-3 цветов, фактурные ткани: лен, муслин, крупная вязка, шелк, без ярких принтов).\n"
+                    "4. Локация и свет: характеристики локации, лучшее окно света (утро или закат).\n"
+                    "5. Идеи для кадров: 5 разноплановых идей (дальний, средний, крупный, макро-детали, динамика).\n"
+                    "6. Блок «Важно ♡»: 4 заботливых совета (не стремиться к идеальным позам, дать быть собой, живые эмоции).\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    f'  "concept": "{concept_title}",\n'
+                    '  "sub_headline": "поэтичный подзаголовок про чувства",\n'
+                    '  "color_palette": [\n'
+                    '    {"name": "Тёплый белый / Экрю", "hex": "#F5EBE0"},\n'
+                    '    {"name": "Песочный / Карамельный", "hex": "#D8C4B6"},\n'
+                    '    {"name": "Терракотовый", "hex": "#8D5B4C"},\n'
+                    '    {"name": "Приглушенный оливковый", "hex": "#2A9D8F"},\n'
+                    '    {"name": "Графитовый / Угольный", "hex": "#2B2D42"}\n'
+                    '  ],\n'
+                    '  "outfit_combinations": [\n'
+                    '    "Сет 1: Тёплый белый + бежевый + карамельный (молочные свитеры, льняные брюки)",\n'
+                    '    "Сет 2: Терракотовый + бежевый + тёплый белый (акцентный свитер или жакет)",\n'
+                    '    "Сет 3: Горчичный + тёплый белый + песочный (фактурное платье и светлый кардиган)",\n'
+                    '    "Сет 4: Оливковый + молочный + деним (спокойные природные тона)",\n'
+                    '    "Сет 5: Карамельный + терракотовый + молочный (многослойный уютный образ)",\n'
+                    '    "Сет 6: Глубокий шоколад + экрю + беж (элегантный контраст)",\n'
+                    '    "Сет 7: Монохромный светлый беж с акцентом на фактуры (хлопок, шерсть, шелк)"\n'
+                    '  ],\n'
+                    '  "location_and_light": "описание локации и мягкий свет (утро или золотой час заката)",\n'
+                    '  "framing_ideas": [\n'
+                    '    "Дальний план: Прогулки рука об руку на фоне пространства",\n'
+                    '    "Средний план: Игры и искренний смех в движении",\n'
+                    '    "Крупный план: Объятия, улыбки, взгляд в кадр и мимо камеры",\n'
+                    '    "Макро-детали: Прикосновения рук, прядь волос, фактура одежды",\n'
+                    '    "Сюжетный кадр: Отдых вместе (чай из термоса, книга, плед)"\n'
+                    '  ],\n'
+                    '  "important_notes": [\n'
+                    '    "Не стремитесь к идеальным заученным позам",\n'
+                    '    "Дайте себе и близким быть собой",\n'
+                    '    "Ловите живые моменты в эмоциях",\n'
+                    '    "Главное — вы и ваши искренние чувства ♡"\n'
+                    '  ],\n'
+                    '  "card_markdown": "готовая презентационная карточка для клиента с эмодзи и разметкой"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "outfit_combinations" in parsed and "color_palette" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
+        # Fallback Yaishka-grade moodboard
+        palette = [
+            {"name": "Тёплый белый / Экрю", "hex": "#F5EBE0"},
+            {"name": "Песочный / Карамель", "hex": "#D8C4B6"},
+            {"name": "Тёплый терракот", "hex": "#8D5B4C"},
+            {"name": "Приглушенный оливковый", "hex": "#2A9D8F"},
+            {"name": "Глубокий графит", "hex": "#2B2D42"}
+        ]
+        outfits = [
+            "Сет 1: Тёплый белый + бежевый + карамельный (молочные свитеры, льняные брюки)",
+            "Сет 2: Терракотовый + бежевый + тёплый белый (акцентный свитер или жакет)",
+            "Сет 3: Горчичный + тёплый белый + песочный (фактурное платье и светлый кардиган)",
+            "Сет 4: Оливковый + молочный + деним (спокойные природные тона)",
+            "Сет 5: Карамельный + терракотовый + молочный (многослойный уютный образ)",
+            "Сет 6: Глубокий шоколад + экрю + беж (элегантный контраст)",
+            "Сет 7: Монохромный светлый беж с акцентом на фактуры (хлопок, шерсть, шелк)"
+        ]
+        framing = [
+            "Дальний план: Прогулки рука об руку на фоне пространства и геометрии локации",
+            "Средний план: Взаимодействие, смех и непринужденное движение",
+            "Крупный план: Объятия, живые глаза, полуулыбка",
+            "Макро-детали: Прикосновения рук, прядь волос, кольца, чашка кофе/термос",
+            "Сюжетный кадр: Маленькое общее действие (пикник, плед, чтение книги)"
+        ]
+        notes = [
+            "Не стремитесь к идеальным заученным позам",
+            "Дайте себе и близким право быть собой",
+            "Ловите моменты в движении и эмоциях",
+            "Главное — вы и ваши искренние чувства ♡"
+        ]
+        card_md = (
+            f"📸 **МУДБОРД: {concept_title.upper()}**\n"
+            f"*«Про теплые объятия, смех, уютную атмосферу и ваши настоящие моменты вместе.»*\n\n"
+            f"🎨 **Палитра съёмки:**\n" + "\n".join([f"• `{p['hex']}` — {p['name']}" for p in palette]) + "\n\n"
+            f"👗 **Подборка образов (7 вариантов):**\n" + "\n".join([f"• {o}" for o in outfits]) + "\n\n"
+            f"📍 **Локация и свет:**\n{location}. Лучшее время — мягкий свет на рассвете или золотой предзакатный час.\n\n"
+            f"🎞 **Идеи для кадров:**\n" + "\n".join([f"• {f}" for f in framing]) + "\n\n"
+            f"🤍 **Важно:**\n" + "\n".join([f"• {n}" for n in notes])
+        )
+        return {
+            "concept": concept_title,
+            "sub_headline": "Про теплые объятия, смех, прогулки и ваши настоящие моменты вместе ♡",
+            "color_palette": palette,
+            "outfit_combinations": outfits,
+            "location_and_light": f"{location}. Мягкий рассеянный свет (утро или закат).",
+            "framing_ideas": framing,
+            "important_notes": notes,
+            "card_markdown": card_md
+        }
+
+    def recommend_music_soundtrack(
+        self,
+        mood_or_concept: str,
+        visual_series_description: Optional[str] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Recommends 4-5 atmospheric audio tracks for visual series, Reels, or Stories.
+        Matches Yaishka screen 16 (Track Selection with Artistic Rationale).
+        """
+        series_info = f"\nОписание визуальной серии: {visual_series_description}" if visual_series_description else ""
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — музыкальный редактор и арт-директор визуальных медиа сервиса «Яишка».\n"
+                    f"Подбери идеальное музыкальное сопровождение под концепцию съёмки:\n"
+                    f"Концепт/настроение: '{mood_or_concept}'.{series_info}\n\n"
+                    "Подбери ровно 4-5 атмосферных треков для Reels, Stories или музыкального слайдшоу.\n"
+                    "Для каждого трека укажи:\n"
+                    "1. Исполнитель и название (или характерный инструментальный стиль)\n"
+                    "2. Жанр и темп (BPM, медленный / качающий / кинематографичный)\n"
+                    "3. Настроение трека\n"
+                    "4. Подробное художественное пояснение: почему этот трек подчеркивает визуальный ритм серии, свет и эмоциональную глубину кадров.\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    f'  "concept": "{mood_or_concept}",\n'
+                    '  "tracks": [\n'
+                    '    {\n'
+                    '      "title": "Исполнитель — Трек",\n'
+                    '      "genre": "Indie Folk / Cinematic Neo-Classical",\n'
+                    '      "tempo": "85 BPM, размеренный мягкий бит",\n'
+                    '      "mood": "Теплый, ностальгический, светлый",\n'
+                    '      "artistic_rationale": "Мягкое акустическое вступление идеально совпадает с медленным панорамированием локации, а легкий ритм поддерживает смену кадров каждые 1.5 секунды."\n'
+                    '    }\n'
+                    '  ],\n'
+                    '  "formatted_recommendations": "красивый готовый текст с эмодзи и рекомендациями для фотографа"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "tracks" in parsed and len(parsed["tracks"]) >= 3:
+                        return parsed
+            except Exception:
+                pass
+
+        tracks = [
+            {
+                "title": "Novo Amor — Anchor",
+                "genre": "Indie Folk / Atmospheric Acoustic",
+                "tempo": "78 BPM, медленный дышащий темп",
+                "mood": "Глубокий, трепетный, кинематографичный",
+                "artistic_rationale": "Идеально подходит под кадры на закате и крупные планы объятий. Воздушный вокал не перетягивает внимание от визуальной серии."
+            },
+            {
+                "title": "Hollow Coves — Coastline",
+                "genre": "Acoustic Indie Pop",
+                "tempo": "95 BPM, бодрый прогулочный ритм",
+                "mood": "Солнечный, свободный, жизнеутверждающий",
+                "artistic_rationale": "Отлично подчеркивает динамичные кадры в движении, искренний смех и прогулку семьи или пары."
+            },
+            {
+                "title": "Ludovico Einaudi — Nuvole Bianche",
+                "genre": "Modern Classical / Minimalist Piano",
+                "tempo": "Рубато, плавный эмоциональный подъем",
+                "mood": "Интимный, возвышенный, чувственный",
+                "artistic_rationale": "Классический выбор для черно-белых серий и портретов крупным планом, где важен взгляд."
+            },
+            {
+                "title": "Leon Bridges — Texas Sun (feat. Khruangbin)",
+                "genre": "Vintage Soul / Psych Groove",
+                "tempo": "88 BPM, мягкий обволакивающий грув",
+                "mood": "Стильный, кинематографичный, теплый",
+                "artistic_rationale": "Безупречно сочетается с аналоговыми пленочными тонами, фактурной одеждой и городскими прогулками."
+            }
+        ]
+        formatted = (
+            f"🎵 **Подборка атмосферных треков для серии: «{mood_or_concept}»**\n\n" +
+            "\n\n".join([
+                f"🎧 **{t['title']}** ({t['genre']})\n"
+                f"• Темп: {t['tempo']}\n"
+                f"• Настроение: {t['mood']}\n"
+                f"• Почему подходит: {t['artistic_rationale']}"
+                for t in tracks
+            ])
+        )
+        return {
+            "concept": mood_or_concept,
+            "tracks": tracks,
+            "formatted_recommendations": formatted
+        }
+
+    def prototype_photozone_concept(
+        self,
+        theme: str,
+        season: Optional[str] = None,
+        studio_type: Optional[str] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Prototypes a photozone concept before physical construction to launch pre-sales.
+        Matches Yaishka screen 14 (Photozone Prototyping & Midjourney prompt generation).
+        """
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — арт-директор фотостудий и декоратор сервиса «Яишка».\n"
+                    f"Создай концепт сезонной фотозоны для предварительных продаж съёмок:\n"
+                    f"Тема: '{theme}', Сезон: '{season or 'сезонный'}', Студия: '{studio_type or 'интерьерная'}'.\n\n"
+                    "Разработай:\n"
+                    "1. Техническое задание декоратору: размеры, свет из окон, базовые цвета.\n"
+                    "2. Список реквизита и ключевых акцентов.\n"
+                    "3. Коммерческий текст для блога / соцсетей фотографа, чтобы продавать съёмки заранее.\n"
+                    "4. Детальный англоязычный промпт для генерации визуального мокапа (Midjourney / Flux / Imagen).\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    f'  "photozone_title": "{theme}",\n'
+                    '  "dimensions_and_light": "размеры 3х4м, естественный свет из окна под 45 градусов",\n'
+                    '  "color_scheme": ["#HEX1 (название)", "#HEX2 (название)"],\n'
+                    '  "key_props": ["предмет 1", "предмет 2", "предмет 3"],\n'
+                    '  "presale_pitch_text": "готовый продающий пост для фотографа с ранним бронированием",\n'
+                    '  "image_generation_prompt": "cinematic photorealistic photozone set design..."\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "image_generation_prompt" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
+        return {
+            "photozone_title": theme,
+            "dimensions_and_light": "Пространство 3.5х4 метра, боковой мягкий свет от большого окна от пола, нейтральный светлый пол.",
+            "color_scheme": ["#D8C4B6 (Песочный)", "#8D5B4C (Тёплый терракот)", "#F5EBE0 (Молочный)", "#2A9D8F (Приглушенный оливковый)"],
+            "key_props": ["Винтажная деревянная мебель", "Текстурные пледы и ткани", "Уютный атмосферный реквизит", "Сезонная флористика и сухоцветы"],
+            "presale_pitch_text": f"Открываю предварительную запись на съёмки в новой авторской фотозоне «{theme}»! Ограниченное количество мест по спец-цене раннего бронирования.",
+            "image_generation_prompt": f"aesthetic cozy photostudio interior corner, theme '{theme}', natural soft window light, warm neutral palette, wooden textures, photorealistic, 8k resolution, architectural photography"
+        }

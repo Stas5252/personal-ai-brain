@@ -224,7 +224,24 @@ class BrainService:
         elif routing.primary_intent == IntentType.VOICE or routing.workflow_suggested == "voice_to_content":
             voice_pack = self.voice_engine.process_voice_transcript(query, profile=profile)
             routing.specialized_system_prompt += f"\n\nРазбор голосового фотографа: события={voice_pack['extracted_events']}, инсайты={voice_pack['business_insights']}. Сформируй: 1 пост, 2 сценария Reels, Stories и задачу."
-        elif routing.primary_intent in [IntentType.PHOTO, IntentType.MOODBOARD] or routing.workflow_suggested == "shoot_preparation":
+        elif routing.primary_intent == IntentType.MOODBOARD or routing.workflow_suggested == "moodboard_creation":
+            default_genre = (getattr(profile, "genres", None) and profile.genres[0]) or getattr(profile, "niche", "Семейная фотосессия") or "Семейная фотосессия"
+            mb_card = self.shooting_engine.generate_moodboard_card(query, genre=default_genre)
+            routing.specialized_system_prompt += f"\n\nМудборд и подбор образов:\n- Концепт: {mb_card['concept']}\n- Палитра: {[c['name'] for c in mb_card['color_palette']]}\n- Сеты образов: {mb_card['outfit_combinations']}\n- Идеи кадров: {mb_card['framing_ideas']}\n- Важно: {mb_card['important_notes']}"
+        elif routing.primary_intent == IntentType.PROFILE_AUDIT or routing.workflow_suggested == "account_audit":
+            audit_res = self.shooting_engine.audit_profile_and_grid(query, profile=profile)
+            routing.specialized_system_prompt += f"\n\nАудит профиля и ленты:\n- Сильные стороны: {audit_res['strengths']}\n- Точки роста: {audit_res['growth_points']}\n- Навигация актуального: {audit_res['highlights_recommendation']}\n- Шахматный ритм ленты: {audit_res['grid_rhythm_advice']}\n- Шаги: {audit_res['action_steps']}"
+        elif routing.primary_intent == IntentType.DISPUTE or routing.workflow_suggested == "dispute_mediation":
+            disp_res = self.sales_engine.mediate_client_dispute(query, profile=profile)
+            routing.specialized_system_prompt += f"\n\nМедиация спора с клиентом:\n- Просадка фотографа: {disp_res['photographer_slippage']}\n- В чем права клиентка: {disp_res['client_justified_points']}\n- Где перегибает: {disp_res['client_overstepping_points']}\n- Скрипт: {disp_res['ready_response_script']}"
+        elif routing.primary_intent == IntentType.MUSIC or routing.workflow_suggested == "music_selection":
+            music_res = self.shooting_engine.recommend_music_soundtrack(query)
+            t_titles = [f"{t['title']} ({t['genre']}): {t['artistic_rationale']}" for t in music_res.get("tracks", [])]
+            routing.specialized_system_prompt += f"\n\nПодбор треков под серию:\n" + "\n".join(t_titles)
+        elif routing.primary_intent == IntentType.PRICING or routing.workflow_suggested == "pricing_strategy":
+            price_guide = self.sales_engine.generate_three_tier_price_guide(profile=profile)
+            routing.specialized_system_prompt += f"\n\nПрайс-лист фотографа (3 тарифа):\n" + "\n".join([f"- {t['name']} ({t['price']}): {', '.join(t['features'][:3])}" for t in price_guide["tiers"]])
+        elif routing.primary_intent == IntentType.PHOTO or routing.workflow_suggested == "shoot_preparation":
             default_genre = (getattr(profile, "genres", None) and profile.genres[0]) or (getattr(profile, "services", None) and profile.services[0]) or getattr(profile, "niche", "Портрет") or "Портрет"
             v_logic = self.shooting_engine.build_visual_logic(query, genre=default_genre)
             routing.specialized_system_prompt += f"\n\nСхема света: {v_logic['light_scheme']['primary']}. Цветовая палитра: {[c['name'] for c in v_logic['color_palette']]}"
@@ -238,7 +255,7 @@ class BrainService:
         target_layer = None
         if routing.primary_intent in [IntentType.PHOTO, IntentType.MOODBOARD]:
             target_layer = KnowledgeLayer.PROFESSIONAL
-        elif routing.primary_intent in [IntentType.SALES, IntentType.PRICING]:
+        elif routing.primary_intent in [IntentType.SALES, IntentType.PRICING, IntentType.DISPUTE]:
             target_layer = KnowledgeLayer.BUSINESS
             
         knowledge_hits = self.knowledge_engine.retrieve(
@@ -290,12 +307,18 @@ class BrainService:
         if images:
             for img_item in images:
                 try:
-                    v_res = self.shooting_engine.critique_shot(img_item)
-                    if v_res.get("status") == "AVAILABLE" and v_res.get("description"):
-                        context_parts.append(f"### ПРЯМОЙ АНАЛИЗ ФОТОГРАФИИ (GEMINI VISION):\n{v_res['description']}")
+                    q_lower = query.lower()
+                    is_profile_audit = any(w in q_lower for w in ["аккаунт", "профиль", "шапк", "лент", "сетк", "инста"]) or routing.primary_intent == IntentType.PROFILE_AUDIT
+                    if is_profile_audit:
+                        aud = self.shooting_engine.audit_profile_and_grid(img_item, profile=profile)
+                        context_parts.append(f"### МУЛЬТИМОДАЛЬНЫЙ АУДИТ АККАУНТА И ЛЕНТЫ (GEMINI VISION):\n{aud.get('full_formatted_audit') or aud.get('grid_rhythm_advice')}")
                     else:
-                        err_msg = v_res.get("error_message") or f"Анализ изображения недоступен (статус: {v_res.get('status', 'UNAVAILABLE')})"
-                        context_parts.append(f"### СТАТУС АНАЛИЗА ФОТОГРАФИИ: {err_msg}")
+                        v_res = self.shooting_engine.analyze_photo_with_critique(img_item, user_question=query)
+                        if v_res.get("status") == "AVAILABLE" and v_res.get("description"):
+                            context_parts.append(f"### 5-МЕРНЫЙ АНАЛИЗ ФОТОГРАФИИ (GEMINI VISION):\n{v_res['description']}")
+                        else:
+                            err_msg = v_res.get("error_message") or f"Анализ изображения недоступен (статус: {v_res.get('status', 'UNAVAILABLE')})"
+                            context_parts.append(f"### СТАТУС АНАЛИЗА ФОТОГРАФИИ: {err_msg}")
                 except Exception as e:
                     context_parts.append(f"### ОШИБКА АНАЛИЗА ФОТОГРАФИИ: {str(e)}")
 

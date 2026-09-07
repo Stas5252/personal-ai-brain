@@ -24,6 +24,8 @@ class IntentType(str, Enum):
     COMPETITOR = "COMPETITOR"
     TASK = "TASK"
     DAILY_PLAN = "DAILY_PLAN"
+    MUSIC = "MUSIC"
+    DISPUTE = "DISPUTE"
 
 class RoutingDecision(BaseModel):
     primary_intent: IntentType

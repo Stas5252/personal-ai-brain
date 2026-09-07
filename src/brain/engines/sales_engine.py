@@ -356,3 +356,281 @@ class SalesEngine:
             "recommendations": recommendations,
             "first_3_seconds_verdict": "Клиент за 3 секунды должен понять: Кто вы, Что снимаете, Где и как записаться."
         }
+
+    def handle_objection_yaishka_style(
+        self,
+        objection_text: str,
+        client_name: Optional[str] = None,
+        service: Optional[str] = None,
+        base_price: Optional[int] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Handles client objections (e.g. 'дорого', 'не потяну сейчас') using Yaishka's signature methodology:
+        1. Empathic emotional validation.
+        2. Strict price protection (zero discounting on core service).
+        3. Rule of Two Choices: offer exactly TWO comfortable alternatives (shorter mini-shoot or split payment / Долями).
+        4. Warm open-door closing for future photo days.
+        Matches Yaishka screen 08.
+        """
+        c_name = client_name or "Имя"
+        serv = service or "семейную съёмку"
+        price_clause = f"Базовый пакет: {base_price} ₽." if base_price else ""
+
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — опытный наставник по продажам для фотографов в сервисе «Яишка».\n"
+                    f"Клиент ({c_name}) написал отказ или сомнение по цене на {serv} ({price_clause}):\n"
+                    f"«««\n{objection_text}\n»»»\n\n"
+                    "Сформируй идеальный ответ строго по методологии Яишки:\n"
+                    "1. Валидация чувств (понимаю вас, правда 🤍... это нормально).\n"
+                    "2. Защита ценности: не падать в цене на основной пакет, а предложить ровно ДВА комфортных выбора:\n"
+                    "   - Выбор 1: мини-съёмка в более коротком формате [длительность, стоимость, сколько фото];\n"
+                    "   - Выбор 2: сохранить основной формат, но разделить оплату на 2 части (или сервис 'Долями' / рассрочка).\n"
+                    "3. Открытая дверь: 'А если пока неактуально — оставайтесь со мной, я периодически делаю фотодни...'\n"
+                    "4. Методический совет фотографу: почему нельзя предлагать меню из 10 вариантов и ронять стоимость основного продукта.\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    '  "client_message": "готовый текст сообщения для отправки клиенту с эмодзи 🤍",\n'
+                    '  "methodological_advice": "совет фотографу по психологии двух выборов",\n'
+                    '  "example_numbers_breakdown": "пример конкретного расчета для пакета",\n'
+                    '  "what_not_to_say": "чего категорически нельзя писать"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "client_message" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
+        # Fallback Yaishka-grade objection handling
+        client_msg = (
+            f"{c_name}, понимаю вас, правда 🤍 Иногда съёмку очень хочется, но именно сейчас бюджет не позволяет — это абсолютно нормально.\n\n"
+            f"Чтобы не откладывать {serv} совсем, могу предложить два более комфортных варианта:\n\n"
+            f"• мини-съёмку в более коротком формате — 30 минут, 15 кадров в авторской ретуши за более комфортную сумму;\n\n"
+            f"• либо оставить основной формат, но разделить оплату на части: например, внести небольшую предоплату для брони даты сейчас, а остаток — в день съёмки или двумя равными платежами (также доступна оплата частями через сервис 'Долями').\n\n"
+            f"Посмотрите, какой вариант вам был бы удобнее. А если пока неактуально — оставайтесь со мной, я периодически провожу фотодни и короткие форматы, возможно, один из них вам идеально подойдёт 🤍"
+        )
+        advice = (
+            "Я бы не предлагал клиентке сразу всё подряд. Лучше дать максимум два выбора: короткий формат и оплату частями. "
+            "Так сообщение остаётся заботливым, а не превращается в меню из десяти способов 'ну пожалуйста, купите'."
+        )
+        return {
+            "client_message": client_msg,
+            "methodological_advice": advice,
+            "example_numbers_breakdown": "Для пакета за 15 000 ₽: экспресс-формат на 30 мин за 7 500 ₽ либо сохранение полного пакета с делением на 2 платежа по 7 500 ₽.",
+            "what_not_to_say": "Не пишите 'Сделаю вам скидку прямо сейчас' (обесценивает труд) или 'У других еще дороже' (звучит токсично)."
+        }
+
+    def mediate_client_dispute(
+        self,
+        dispute_description: str,
+        photographer_role: str = "автор",
+        profile: Optional[UserProfile] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Mediation and professional analysis of client disputes / conflicts from a photo-business lens.
+        Matches Yaishka screen 12 (Dispute breakdown: where I slipped, where client is right, where client crosses line).
+        """
+        p_name = (profile and profile.identity) or "фотограф"
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — опытный юрист и бизнес-медиатор для фотографов в сервисе «Яишка».\n"
+                    f"Фотограф ({p_name}) описал конфликтную или спорную ситуацию с клиентом:\n"
+                    f"«««\n{dispute_description}\n»»»\n\n"
+                    "Проведи глубокий объективный разбор ситуации именно с точки зрения сервиса фотографа и нашей профессиональной работы:\n"
+                    "1. 'Где моя просадка': трезво укажи, где фотограф сам допустил ошибку (не зафиксировал ожидания в переписке/договоре, размыл дедлайн, не объяснил условия ретуши).\n"
+                    "2. 'Где права клиентка': в чем эмоции или претензии клиента имеют разумное основание.\n"
+                    "3. 'Где клиентка уже перегибает / нарушает границы': необоснованные требования (отдать все RAW, хамить, требовать возврат за уже оказанную качественную услугу).\n"
+                    "4. Стратегия общения и готовый скрипт ответа: вежливый, сдержанный, защищающий границы и профессиональное достоинство фотографа, закрывающий конфликт без суда и скандала.\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    '  "photographer_slippage": "где просадка фотографа",\n'
+                    '  "client_justified_points": "в чем клиентка права",\n'
+                    '  "client_overstepping_points": "где клиентка нарушает границы и перегибает",\n'
+                    '  "strategic_recommendations": ["рекомендация 1", "рекомендация 2"],\n'
+                    '  "ready_response_script": "готовый текст ответа клиенту в вежливом и твердом тоне",\n'
+                    '  "formatted_mediation": "полный текст разбора для фотографа с абзацами и пунктами"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.3)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "ready_response_script" in parsed:
+                        return parsed
+            except Exception:
+                pass
+
+        # Fallback Yaishka-grade dispute mediation
+        slippage = "Не были четко прописаны условия: количество кадров в ретуши, порядок отбора и то, что исходники в формате RAW являются рабочим материалом и не отдаются."
+        justified = "Клиентка переживает за свои вложенные деньги и результат, хочет видеть себя красивой и испытывает естественную тревожность."
+        overstepping = "Требование отдать сырые файлы RAW без обработки, попытка обесценить проведенную съемочную работу или переход на эмоциональные манипуляции."
+        script = (
+            "«Здравствуйте! Я понимаю ваши переживания: съёмка — это важное событие, и для меня действительно ценно, чтобы вы остались довольны результатом. "
+            "Давайте сверимся с нашими договоренностями: я отдаю серию в авторской цветокоррекции и оговоренное количество кадров в детальной ретуши. "
+            "Исходные файлы RAW являются техническим материалом и по стандарту профессии не передаются. "
+            "Чтобы решить вопрос конструктивно, давайте вы выберете 5 кадров из готовой серии, в которых вам хотелось бы скорректировать детали, и я бесплатно внесу эти правки в рамках согласованного стиля. "
+            "Уверена, мы найдем комфортное решение!»"
+        )
+        formatted = (
+            f"⚖️ **Разбор спорной ситуации с точки зрения фотобизнеса:**\n\n"
+            f"1. **Где твоя просадка:**\n{slippage}\n\n"
+            f"2. **В чем права клиентка:**\n{justified}\n\n"
+            f"3. **Где клиентка перегибает:**\n{overstepping}\n\n"
+            f"🎯 **Стратегия общения:**\n"
+            f"• Не оправдывайся и не проявляй агрессию.\n"
+            f"• Валидируй её эмоцию, но твердо держи профессиональные границы.\n"
+            f"• Предложи один четкий конструктивный шаг решения (например, доработка 3-5 конкретных кадров).\n\n"
+            f"💬 **Готовый скрипт ответа:**\n{script}"
+        )
+        return {
+            "photographer_slippage": slippage,
+            "client_justified_points": justified,
+            "client_overstepping_points": overstepping,
+            "strategic_recommendations": [
+                "Твердо зафиксировать границы: RAW не отдаются",
+                "Предложить ограниченный шаг навстречу: правка 3-5 конкретных замечаний"
+            ],
+            "ready_response_script": script,
+            "formatted_mediation": formatted
+        }
+
+    def generate_three_tier_price_guide(
+        self,
+        niche: Optional[str] = None,
+        base_price: int = 20000,
+        currency: str = "₽",
+        profile: Optional[UserProfile] = None,
+        use_llm: bool = True
+    ) -> Dict[str, Any]:
+        """
+        Generates a premium 3-tier pricing structure ('Лайт', 'Оптимальный - Самый популярный', 'Премиум')
+        with value stacking and trust bar matching Yaishka screen 07.
+        """
+        active_niche = niche or (profile and profile.niche) or "Авторская фотосъёмка"
+        p_light = int(base_price * 0.6)
+        p_opt = base_price
+        p_prem = int(base_price * 1.75)
+
+        if use_llm:
+            try:
+                import json
+                from src.brain.services.llm_provider import LLMProvider
+                prompt = (
+                    f"Ты — коммерческий директор фотографов сервиса «Яишка».\n"
+                    f"Создай эталонный премиальный прайс-лист для ниши '{active_niche}'.\n"
+                    f"Базовый якорь цены: {p_opt} {currency}.\n\n"
+                    "Сформируй линейку ровно из 3 тарифов по 'Правилу трех':\n"
+                    "1. Тариф 01: «ЛАЙТ» (Минимум. Ничего лишнего) — цена ~{p_light} {currency}, до 1 часа, 50+ фото, 1 локация, 1 образ, готовность до 7 дней.\n"
+                    "2. Тариф 02: «ОПТИМАЛЬНЫЙ» [САМЫЙ ПОПУЛЯРНЫЙ] (Баланс времени и результата) — цена {p_opt} {currency}, до 2 часов, 100+ фото, 10 глубокой ретуши, 1-2 локации, 2 образа, готовность до 5 дней, помощь в позировании и мудборд.\n"
+                    "3. Тариф 03: «ПРЕМИУМ» (Полная история) — цена ~{p_prem} {currency}, до 4 часов, 200+ фото, 20 глубокой ретуши, до 3 локаций/образов, готовность до 3 дней, бронь без предоплаты.\n"
+                    "4. Нижняя панель с преимуществами: 4 гарантии (индивидуальный подход, ретушь включена, конфиденциальность, поддержка).\n\n"
+                    "Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    "{\n"
+                    '  "niche": "' + active_niche + '",\n'
+                    '  "tiers": [\n'
+                    '    {"name": "ЛАЙТ", "subtitle": "МИНИМУМ. НИЧЕГО ЛИШНЕГО.", "price": "' + f"{p_light:,} {currency}".replace(",", " ") + '", "features": ["⏱ ДО 1 ЧАСА СЪЕМКИ", "🖼 50+ ФОТО В БАЗОВОЙ РЕТУШИ", "✨ ГОТОВНОСТЬ ДО 7 ДНЕЙ", "📍 1 ЛОКАЦИЯ", "👔 1 ОБРАЗ"]},\n'
+                    '    {"name": "ОПТИМАЛЬНЫЙ", "badge": "САМЫЙ ПОПУЛЯРНЫЙ", "subtitle": "БАЛАНС ВРЕМЕНИ И РЕЗУЛЬТАТА.", "price": "' + f"{p_opt:,} {currency}".replace(",", " ") + '", "features": ["⏱ ДО 2 ЧАСОВ СЪЕМКИ", "🖼 100+ ФОТО В РЕТУШИ", "✨ 10 ФОТО В ГЛУБОКОЙ РЕТУШИ", "✨ ГОТОВНОСТЬ ДО 5 ДНЕЙ", "📍 1–2 ЛОКАЦИИ", "👔 2 ОБРАЗА", "🎁 ПОМОЩЬ В ПОЗИРОВАНИИ И ПОДБОРЕ ОБРАЗА"]},\n'
+                    '    {"name": "ПРЕМИУМ", "subtitle": "ПОЛНЫЙ ДЕНЬ. ПОЛНАЯ ИСТОРИЯ.", "price": "' + f"{p_prem:,} {currency}".replace(",", " ") + '", "features": ["⏱ ДО 4 ЧАСОВ СЪЕМКИ", "🖼 200+ ФОТО В РЕТУШИ", "✨ 20 ФОТО В ГЛУБОКОЙ РЕТУШИ", "✨ ГОТОВНОСТЬ ДО 3 ДНЕЙ", "📍 ДО 3 ЛОКАЦИЙ", "👔 ДО 3 ОБРАЗОВ", "🎁 ПОЛНОЕ ПРОДЮСИРОВАНИЕ КОНЦЕПЦИИ", "📅 БРОНИРОВАНИЕ БЕЗ ПРЕДОПЛАТЫ"]}\n'
+                    '  ],\n'
+                    '  "guarantees": ["🤍 ИНДИВИДУАЛЬНЫЙ ПОДХОД К КАЖДОМУ ГЕРОЮ", "✨ ВСЯ БАЗОВАЯ РЕТУШЬ ВКЛЮЧЕНА", "🔒 КОНФИДЕНЦИАЛЬНОСТЬ И БЕЗОПАСНОСТЬ", "📅 ЛЕГКОЕ БРОНИРОВАНИЕ И ПОДДЕРЖКА"],\n'
+                    '  "card_markdown": "готовый красивый прайс-лист в markdown с разделителями и эмодзи"\n'
+                    "}"
+                )
+                code, text, _, _ = LLMProvider().chat_completion([{"role": "user", "content": prompt}], temperature=0.4)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "tiers" in parsed and len(parsed["tiers"]) == 3:
+                        return parsed
+            except Exception:
+                pass
+
+        tiers = [
+            {
+                "name": "ТАРИФ 01: «ЛАЙТ»",
+                "subtitle": "МИНИМУМ. НИЧЕГО ЛИШНЕГО.",
+                "price": f"{p_light:,} {currency}".replace(",", " "),
+                "features": [
+                    "⏱ ДО 1 ЧАСА СЪЕМКИ",
+                    "🖼 50+ ФОТО В ЦВЕТОКОРРЕКЦИИ",
+                    "✨ ГОТОВНОСТЬ ДО 7 ДНЕЙ",
+                    "📍 1 ЛОКАЦИЯ",
+                    "👔 1 ОБРАЗ"
+                ]
+            },
+            {
+                "name": "ТАРИФ 02: «ОПТИМАЛЬНЫЙ» ⭐ [САМЫЙ ПОПУЛЯРНЫЙ]",
+                "subtitle": "БАЛАНС ВРЕМЕНИ И РЕЗУЛЬТАТА.",
+                "price": f"{p_opt:,} {currency}".replace(",", " "),
+                "features": [
+                    "⏱ ДО 2 ЧАСОВ СЪЕМКИ",
+                    "🖼 100+ ФОТО В ЦВЕТОКОРРЕКЦИИ",
+                    "✨ 10 ФОТО В ГЛУБОКОЙ АВТОРСКОЙ РЕТУШИ",
+                    "✨ ГОТОВНОСТЬ ДО 5 ДНЕЙ",
+                    "📍 1–2 ЛОКАЦИИ",
+                    "👔 2 ОБРАЗА",
+                    "🎁 МУДБОРД И ПОМОЩЬ С ПОЗИРОВАНИЕМ"
+                ]
+            },
+            {
+                "name": "ТАРИФ 03: «ПРЕМИУМ»",
+                "subtitle": "ПОЛНЫЙ ДЕНЬ. ПОЛНАЯ ИСТОРИЯ.",
+                "price": f"{p_prem:,} {currency}".replace(",", " "),
+                "features": [
+                    "⏱ ДО 4 ЧАСОВ СЪЕМКИ",
+                    "🖼 200+ ФОТО В ОБРАБОТКЕ",
+                    "✨ 20 ФОТО В ГЛУБОКОЙ РЕТУШИ",
+                    "✨ ГОТОВНОСТЬ ДО 3 ДНЕЙ (УСКОРЕННАЯ ОТДАЧА)",
+                    "📍 ДО 3 ЛОКАЦИЙ",
+                    "👔 ДО 3 ОБРАЗОВ",
+                    "🎁 ПОЛНОЕ ПРОДЮСИРОВАНИЕ, ПОДБОР СТИЛЯ И ЛОКАЦИЙ",
+                    "📅 БРОНИРОВАНИЕ БЕЗ ПРЕДОПЛАТЫ"
+                ]
+            }
+        ]
+        guarantees = [
+            "🤍 ИНДИВИДУАЛЬНЫЙ ПОДХОД К КАЖДОМУ ГЕРОЮ",
+            "✨ ВСЯ БАЗОВАЯ РЕТУШЬ ВКЛЮЧЕНА В СТОИМОСТЬ",
+            "🔒 ПОЛНАЯ КОНФИДЕНЦИАЛЬНОСТЬ (БЕЗ ДОПЛАТ ЗА НЕПУБЛИКАЦИЮ)",
+            "📅 ПОДДЕРЖКА И ВЕДЕНИЕ НА ВСЕХ ЭТАПАХ"
+        ]
+        card = (
+            f"📋 **П Р А Й С — {active_niche.upper()}**\n"
+            f"*«Фотосъёмка для тех, кто ценит качество, искренность и сервис.»*\n\n"
+            f"━━━━━━━━━━━━━━━━━━━\n\n"
+        )
+        for t in tiers:
+            badge = " 🔥" if "ПОПУЛЯРНЫЙ" in t["name"] else ""
+            card += f"### {t['name']}{badge}\n*{t['subtitle']}*\n\n"
+            for f in t["features"]:
+                card += f"• {f}\n"
+            card += f"\n💰 **Стоимость:** `{t['price']}`\n\n━━━━━━━━━━━━━━━━━━━\n\n"
+
+        card += "🛡 **В каждый тариф включено:**\n" + "\n".join([f"• {g}" for g in guarantees])
+        card += "\n\n*Давайте создавать красоту вместе. 🤍*"
+
+        return {
+            "niche": active_niche,
+            "tiers": tiers,
+            "guarantees": guarantees,
+            "card_markdown": card
+        }
+
