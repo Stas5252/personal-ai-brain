@@ -24,6 +24,27 @@ class ChromaVectorIndex:
         )
         self.embedding_provider = embedding_provider
 
+    def _heal_corrupted_hnsw(self):
+        """Detects incomplete HNSW segment files (e.g. 0-byte .bin) and removes them so Chroma reloads cleanly from sqlite."""
+        import shutil
+        try:
+            for sub in self.vector_dir.iterdir():
+                if sub.is_dir():
+                    is_corrupt = False
+                    for f in sub.glob("*.bin"):
+                        if f.stat().st_size == 0:
+                            is_corrupt = True
+                            break
+                    if is_corrupt:
+                        shutil.rmtree(sub, ignore_errors=True)
+            self.client = chromadb.PersistentClient(path=str(self.vector_dir))
+            self.collection = self.client.get_or_create_collection(
+                name=COLLECTION_NAME,
+                metadata={"description": "Personal AI Brain Multimodal Knowledge Vectors"}
+            )
+        except Exception:
+            pass
+
     def upsert_chunks(self, chunks: List[KnowledgeChunk], embeddings: Optional[List[List[float]]] = None):
         """Indexes chunks into ChromaDB with rich metadata for filtering."""
         if not chunks:
@@ -80,25 +101,38 @@ class ChromaVectorIndex:
         elif len(conditions) > 1:
             where_filter = {"$and": conditions}
 
-        if query_embedding is not None:
-            res = self.collection.query(
-                query_embeddings=[query_embedding],
-                n_results=top_k,
-                where=where_filter
-            )
-        elif self.embedding_provider is not None:
-            q_emb = self.embedding_provider.embed_query(query_text)
-            res = self.collection.query(
-                query_embeddings=[q_emb],
-                n_results=top_k,
-                where=where_filter
-            )
-        else:
-            res = self.collection.query(
-                query_texts=[query_text],
-                n_results=top_k,
-                where=where_filter
-            )
+        try:
+            if query_embedding is not None:
+                res = self.collection.query(
+                    query_embeddings=[query_embedding],
+                    n_results=top_k,
+                    where=where_filter
+                )
+            elif self.embedding_provider is not None:
+                q_emb = self.embedding_provider.embed_query(query_text)
+                res = self.collection.query(
+                    query_embeddings=[q_emb],
+                    n_results=top_k,
+                    where=where_filter
+                )
+            else:
+                res = self.collection.query(
+                    query_texts=[query_text],
+                    n_results=top_k,
+                    where=where_filter
+                )
+        except Exception as e:
+            if "hnsw" in str(e).lower() or "segment reader" in str(e).lower() or "compactor" in str(e).lower():
+                self._heal_corrupted_hnsw()
+                if query_embedding is not None:
+                    res = self.collection.query(query_embeddings=[query_embedding], n_results=top_k, where=where_filter)
+                elif self.embedding_provider is not None:
+                    q_emb = self.embedding_provider.embed_query(query_text)
+                    res = self.collection.query(query_embeddings=[q_emb], n_results=top_k, where=where_filter)
+                else:
+                    res = self.collection.query(query_texts=[query_text], n_results=top_k, where=where_filter)
+            else:
+                raise
 
         results = []
         if res and res.get("ids") and res["ids"][0]:
