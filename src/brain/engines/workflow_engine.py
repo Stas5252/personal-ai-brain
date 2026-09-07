@@ -105,6 +105,7 @@ class WorkflowEngine:
             }
 
         wf_id = str(uuid.uuid4())
+        first_gated = bool(template["steps"] and template["steps"][0].get("requires_approval", False))
         steps = [
             WorkflowStep(
                 step_index=idx,
@@ -112,7 +113,7 @@ class WorkflowEngine:
                 description=s["description"],
                 action=s["action"],
                 requires_approval=s.get("requires_approval", False),
-                status="IN_PROGRESS" if idx == 0 else "PENDING"
+                status=("WAITING_APPROVAL" if first_gated else "IN_PROGRESS") if idx == 0 else "PENDING"
             )
             for idx, s in enumerate(template["steps"])
         ]
@@ -121,12 +122,12 @@ class WorkflowEngine:
             workflow_id=wf_id,
             name=name or template["name"],
             workflow_type=workflow_type,
-            status="ACTIVE",
+            status="WAITING_APPROVAL" if first_gated else "ACTIVE",
             current_step=0,
             steps=steps,
             context_data=initial_context or {},
             results={},
-            approval_state="PENDING" if steps[0].requires_approval else "NONE"
+            approval_state="PENDING" if first_gated else "NONE"
         )
         self._save_instance(instance)
         return instance
@@ -155,10 +156,28 @@ class WorkflowEngine:
             return None
         return self._row_to_instance(row)
 
+    def cancel_workflow(self, workflow_id: str) -> WorkflowInstance:
+        wf = self.get_workflow(workflow_id)
+        if not wf:
+            raise ValueError(f"Workflow {workflow_id} not found")
+        wf.status = "CANCELLED"
+        wf.updated_at = datetime.now(timezone.utc).isoformat()
+        self._save_instance(wf)
+        return wf
+
     def advance_step(self, workflow_id: str, step_output: Dict[str, Any], next_inputs: Optional[Dict[str, Any]] = None) -> WorkflowInstance:
         wf = self.get_workflow(workflow_id)
         if not wf:
             raise ValueError(f"Workflow {workflow_id} not found")
+
+        if wf.status == "COMPLETED":
+            raise ValueError(f"Workflow {workflow_id} is already completed")
+        if wf.status == "CANCELLED":
+            raise ValueError(f"Workflow {workflow_id} is cancelled")
+        if wf.status == "WAITING_APPROVAL":
+            raise ValueError(f"Workflow {workflow_id} step {wf.current_step} ('{wf.steps[wf.current_step].name}') requires approval before execution")
+        if wf.status == "WAITING_INPUT":
+            raise ValueError(f"Workflow {workflow_id} step {wf.current_step} ('{wf.steps[wf.current_step].name}') is waiting for input or rejected")
 
         curr_idx = wf.current_step
         if curr_idx < len(wf.steps):
@@ -221,7 +240,17 @@ class WorkflowEngine:
         if not wf:
             raise ValueError(f"Workflow {workflow_id} not found")
 
+        if wf.status == "COMPLETED":
+            raise ValueError(f"Workflow {workflow_id} is already completed")
+        if wf.status == "CANCELLED":
+            raise ValueError(f"Workflow {workflow_id} is cancelled")
+
         curr_step = wf.steps[wf.current_step]
+        if wf.status == "WAITING_APPROVAL":
+            raise ValueError(f"Workflow {workflow_id} step {wf.current_step} ('{curr_step.name}') requires approval before execution")
+        if wf.status == "WAITING_INPUT":
+            raise ValueError(f"Workflow {workflow_id} step {wf.current_step} ('{curr_step.name}') is waiting for input or rejected")
+
         action = curr_step.action
         ctx = wf.context_data
         output = {}
@@ -265,14 +294,114 @@ class WorkflowEngine:
                     f"А что для вас самое сложное на съемках — выбор образа или первые минуты перед камерой?"
                 )
             output = {"draft_prompt": fmt, "draft_text": draft_text}
-        elif action in ["concept", "visuals"]:
+        elif action == "audit":
+            theme = ctx.get("theme", wf.name or "Фотодень")
+            city = (profile and profile.city) or ctx.get("city", "город не указан")
+            niche = (profile and profile.niche) or ctx.get("niche", "авторская портретная фотография")
+            aud = (profile and profile.audience) or ctx.get("audience", "целевая аудитория")
+            audit_res = None
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = (
+                    f"Ты — коммерческий продюсер и маркетолог для фотографов.\n"
+                    f"Проведи экспресс-аудит контекста для запуска спецпроекта / фотодня «{theme}».\n"
+                    f"Параметры фотографа:\n"
+                    f"- Ниша: {niche}\n"
+                    f"- Город: {city}\n"
+                    f"- Аудитория: {aud}\n\n"
+                    f"Определи:\n"
+                    f"1. Готовность аудитории и позиционирование проекта\n"
+                    f"2. Рекомендуемый фокус ценности (почему купят именно сейчас)\n"
+                    f"3. Ключевые риски и рекомендации по формату\n\n"
+                    f"Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    f"{{\n"
+                    f'  "market_readiness": "высокая / средняя",\n'
+                    f'  "target_segment": "описание целевого сегмента",\n'
+                    f'  "core_value_proposition": "главная ценность предложения",\n'
+                    f'  "audit_recommendations": ["рекомендация 1", "рекомендация 2"]\n'
+                    f"}}"
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "core_value_proposition" in parsed:
+                        audit_res = parsed
+            except Exception:
+                pass
+            if not audit_res:
+                audit_res = {
+                    "market_readiness": "высокая",
+                    "target_segment": f"Клиенты в нише '{niche}' ({city}), ценящие готовый результат без сложной подготовки",
+                    "core_value_proposition": f"Концептуальный фотодень «{theme}» с продуманным светом, локацией и готовыми образами",
+                    "audit_recommendations": [
+                        "Сфокусироваться на ограниченном количестве слотов (не более 4-5 героев в день)",
+                        "Заранее подготовить мудборд и схему света, чтобы съемки шли в едином тайминге"
+                    ]
+                }
+            output = {"audit": audit_res}
+        elif action == "concept":
+            theme = ctx.get("theme", wf.name or "Индивидуальный портрет")
+            genre = ctx.get("genre", "Авторский портрет")
+            mood = ctx.get("mood", "Кинематографичный, глубокий, естественный")
+            concept_res = None
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = (
+                    f"Ты — креативный арт-директор и концептуалист в фотографии.\n"
+                    f"Разработай художественную концепцию съемки:\n"
+                    f"- Тема: {theme}\n"
+                    f"- Жанр: {genre}\n"
+                    f"- Настроение: {mood}\n\n"
+                    f"Опиши:\n"
+                    f"1. Главная идея и драматургия съемки (о чем эта визуальная история)\n"
+                    f"2. Ключевые эмоции и состояние героя в кадре\n"
+                    f"3. Визуальные референсы и метафоры\n\n"
+                    f"Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
+                    f"{{\n"
+                    f'  "concept_title": "{theme}",\n'
+                    f'  "core_narrative": "драматургия и идея съемки",\n'
+                    f'  "hero_state": "состояние и эмоции героя",\n'
+                    f'  "visual_references": ["референс 1", "референс 2", "референс 3"]\n'
+                    f"}}"
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, dict) and "core_narrative" in parsed:
+                        concept_res = parsed
+            except Exception:
+                pass
+            if not concept_res:
+                concept_res = {
+                    "concept_title": theme,
+                    "core_narrative": f"Исследование естественной красоты и внутреннего состояния героя в рамках концепта «{theme}».",
+                    "hero_state": "Расслабленность, глубина, уверенность и искренность без заученных поз.",
+                    "visual_references": [
+                        "Кинематографичный боковой свет и фактурный нейтральный фон",
+                        "Портреты крупным планом с живым глубоким взглядом",
+                        "Динамичные кадры в полуоборота с воздухом в кадре"
+                    ]
+                }
+            output = {"concept": concept_res}
+        elif action == "visuals":
             se = ShootingEngine()
-            theme = ctx.get("theme", "Индивидуальный портрет")
-            output = se.build_visual_logic(theme)
+            theme = ctx.get("theme") or wf.results.get("concept_definition", {}).get("concept", {}).get("concept_title") or wf.name or "Индивидуальный портрет"
+            genre = ctx.get("genre", "Индивидуальный портрет")
+            mood = ctx.get("mood", "Кинематографичный, сдержанный, глубокий")
+            output = se.build_visual_logic(theme, genre=genre, mood=mood)
         elif action == "pricing":
             sa = SalesEngine()
             packages = ctx.get("packages", [{"name": "Стандарт", "price": 15000, "duration_hours": 1, "retouched_photos": 20}])
             output = sa.evaluate_pricing_ladder(packages)
+            output["packages"] = packages
         elif action == "content":
             ce = ContentEngine()
             fmt = ce.build_format_prompt("post")
@@ -346,43 +475,176 @@ class WorkflowEngine:
                 )
             output = {"reels_template": fmt, "reels_content": reels_content}
         elif action == "sales":
-            sa = SalesEngine()
-            output = {"dm_template": sa.generate_objection_response("дорого", profile=profile)}
+            theme = ctx.get("theme", wf.name or "Фотодень")
+            city = (profile and profile.city) or ctx.get("city", "")
+            city_str = f" в {city}" if city else ""
+            packages = ctx.get("packages") or wf.results.get("package_architecture", {}).get("packages")
+            dm_text = ""
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                niche = profile.niche if profile and profile.niche else "авторская фотография"
+                tone = profile.tone if profile and profile.tone else "теплый, заботливый"
+                pkg_info = f"Пакеты: {json.dumps(packages, ensure_ascii=False)}" if packages else "Формат: индивидуальные слоты с полной подготовкой"
+                prompt = (
+                    f"Ты — фотограф ({niche}, тон: {tone}).\n"
+                    f"Напиши готовый идеальный шаблон первого ответа клиенту в Direct / Telegram, который интересуется спецпроектом «{theme}»{city_str}.\n"
+                    f"{pkg_info}\n\n"
+                    f"Правила:\n"
+                    f"- Теплое приветствие без шаблонов и панибратства\n"
+                    f"- Кратко раскрыть ценность концепта и что уже включено\n"
+                    f"- Предложить выбрать удобное время или задать вопрос\n"
+                    f"Верни ТОЛЬКО текст шаблона ответа в кавычках."
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
+                if code == 200 and len(text.strip()) > 30 and not text.strip().startswith("Тестовый ответ"):
+                    dm_text = text.strip()
+            except Exception:
+                pass
+            if not dm_text:
+                dm_text = (
+                    f"«Здравствуйте! С радостью расскажу про наш фотодень «{theme}»{city_str}! ✨\n\n"
+                    f"Этот день мы создали для того, чтобы вы получили не просто кадры, а удовольствие от процесса: "
+                    f"я полностью беру на себя свет, помощь с позированием и подбор образов.\n\n"
+                    f"В стоимость входит 50 минут съемки, аренда студии и все удачные фото в авторской обработке.\n\n"
+                    f"Подскажите, на какое время дня вам комфортнее ориентироваться — утро или вторая половина?»"
+                )
+            output = {"dm_template": dm_text}
         elif action == "checklist":
-            se = ShootingEngine()
-            output = {"checklist": se.generate_client_prep_memo("Участник фотодня")}
+            theme = ctx.get("theme", wf.name or "Фотодень")
+            city = (profile and profile.city) or ctx.get("city", "")
+            checklist_items = []
+            try:
+                from src.brain.services.llm_provider import LLMProvider
+                llm = LLMProvider()
+                prompt = (
+                    f"Ты — опытный продюсер фотопроектов.\n"
+                    f"Составь подробный чек-лист организационной подготовки для фотографа к проведению фотодня «{theme}» ({city or 'студия'}).\n"
+                    f"Включи 5-6 ключевых этапов: бронь студии, тайминг слотов, подготовка оборудования, коммуникация с клиентами, атмосфера.\n"
+                    f"Верни ИСКЛЮЧИТЕЛЬНО валидный JSON массив строк:\n"
+                    f'["пункт 1", "пункт 2", "пункт 3", "пункт 4", "пункт 5", "пункт 6"]'
+                )
+                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.5)
+                if code == 200 and not text.strip().startswith("Тестовый ответ"):
+                    clean = text.strip()
+                    if clean.startswith("```"):
+                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(clean)
+                    if isinstance(parsed, list) and len(parsed) >= 4:
+                        checklist_items = parsed
+            except Exception:
+                pass
+            if not checklist_items:
+                checklist_items = [
+                    f"Забронировать студию и согласовать свет под концепт «{theme}»",
+                    "Сформировать сетку слотов с перерывом 15 минут между героями",
+                    "Зарядить аккумуляторы, очистить флешки и подготовить бекап-камеру",
+                    "Отправить всем участникам памятку по гардеробу за 48 часов",
+                    "Подготовить вдохновляющий плейлист и напитки для создания уюта",
+                    "Сохранить мудборд на телефон/планшет для быстрой сверки на площадке"
+                ]
+            output = {"checklist": checklist_items}
         elif action == "parse":
             sa = SalesEngine()
             dialogue = ctx.get("dialogue", "Здравствуйте! Сколько стоит?")
-            output = sa.analyze_client_dialogue(dialogue)
+            output = sa.analyze_client_dialogue(dialogue, client=ctx.get("client"))
         elif action == "diagnose":
             sa = SalesEngine()
             dialogue = ctx.get("dialogue", "Здравствуйте! Это слишком дорого.")
-            output = sa.analyze_client_dialogue(dialogue)
+            output = sa.analyze_client_dialogue(dialogue, client=ctx.get("client"))
         elif action == "strategy":
             sa = SalesEngine()
             dialogue = ctx.get("dialogue", "Здравствуйте! Это слишком дорого.")
-            diag = sa.analyze_client_dialogue(dialogue)
+            diag = wf.results.get("diagnose_objection") or wf.results.get("reconstruct_dialogue") or sa.analyze_client_dialogue(dialogue, client=ctx.get("client"))
             output = {"strategy": diag.get("recommended_strategy", "Раскрыть ценность подготовки и сервиса")}
         elif action == "draft_message":
             sa = SalesEngine()
-            output = {"response": sa.generate_objection_response("дорого", profile=profile)}
+            diag = wf.results.get("diagnose_objection") or wf.results.get("reconstruct_dialogue") or {}
+            detected_objs = diag.get("detected_objections", [])
+            primary_obj = ctx.get("objection") or (detected_objs[0] if detected_objs else None) or ctx.get("dialogue", "дорого")
+            resp_text = sa.generate_objection_response(primary_obj, profile=profile, client=ctx.get("client"))
+            output = {"response": resp_text}
+        elif action == "task":
+            from src.brain.models.task import TaskPriority, TaskStatus, ApprovalState
+            client_id = ctx.get("client_id") or (ctx.get("client") and getattr(ctx.get("client"), "id", None))
+            client_name = ctx.get("client_name") or (ctx.get("client") and getattr(ctx.get("client"), "name", None)) or "Клиент"
+            task_title = ctx.get("task_title") or f"Follow-up диалога с клиентом: {client_name}"
+            task_id = str(uuid.uuid4())
+            now_str = datetime.now(timezone.utc).isoformat()
+            try:
+                conn = get_connection()
+                c = conn.cursor()
+                c.execute("""
+                INSERT INTO tasks (task_id, title, type, status, priority, created_at, due_at, project_id, client_id, inputs_json, outputs_json, approval_state)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    task_id, task_title, "client_followup", TaskStatus.TODO.value, TaskPriority.HIGH.value,
+                    now_str, None, None, client_id,
+                    json.dumps({"workflow_id": workflow_id, "dialogue": ctx.get("dialogue")}, ensure_ascii=False),
+                    json.dumps({}, ensure_ascii=False),
+                    ApprovalState.NONE.value
+                ))
+                conn.commit()
+                conn.close()
+            except Exception:
+                pass
+            output = {
+                "task_id": task_id,
+                "title": task_title,
+                "priority": TaskPriority.HIGH.value,
+                "status": TaskStatus.TODO.value
+            }
         elif action == "shotlist":
             se = ShootingEngine()
-            output = {"shot_list": se.generate_shot_list(60)}
+            c_data = (
+                wf.results.get("concept_definition", {}).get("concept") or
+                wf.results.get("concept_and_visual_logic", {}).get("concept")
+            )
+            c_extracted = (c_data.get("concept_title") or c_data.get("core_narrative")) if isinstance(c_data, dict) else (c_data if isinstance(c_data, str) else None)
+            concept_title = (
+                ctx.get("concept") or ctx.get("theme") or
+                c_extracted or
+                "Индивидуальная авторская портретная съёмка"
+            )
+            duration = ctx.get("duration", 60)
+            output = {"shot_list": se.generate_shot_list(duration_minutes=duration, concept=concept_title)}
         elif action == "memo":
             se = ShootingEngine()
-            output = {"memo": se.generate_client_prep_memo("Герой съемки")}
+            c_name = ctx.get("client_name", "Герой съемки")
+            genre = ctx.get("genre") or ctx.get("theme") or "авторская съемка"
+            location = ctx.get("location", "студия")
+            output = {"memo": se.generate_client_prep_memo(client_name=c_name, genre=genre, location=location)}
         elif action == "scan":
             pe = ProactiveEngine()
-            output = pe.generate_daily_plan(profile=profile)
+            plan = pe.generate_daily_plan(profile=profile)
+            output = {
+                "scan_report": "Сканирование проектов, дедлайнов и клиентов завершено",
+                "date": plan.get("date"),
+                "detected_priorities_preview": plan.get("priorities", [])
+            }
         elif action == "prioritize":
             pe = ProactiveEngine()
             output = pe.generate_daily_plan(profile=profile)
-        elif action in ["parse_voice", "generate_pack"]:
+        elif action == "parse_voice":
             ve = VoiceEngine()
             transcript = ctx.get("transcript", "Вчера была отличная съемка!")
-            output = ve.process_voice_transcript(transcript, profile=profile)
+            voice_res = ve.process_voice_transcript(transcript, profile=profile)
+            output = {
+                "source_transcript": voice_res.get("source_transcript"),
+                "extracted_events": voice_res.get("extracted_events"),
+                "story_beats": voice_res.get("story_beats"),
+                "business_insights": voice_res.get("business_insights")
+            }
+        elif action == "generate_pack":
+            ve = VoiceEngine()
+            transcript = ctx.get("transcript", "Вчера была отличная съемка!")
+            voice_res = ve.process_voice_transcript(transcript, profile=profile)
+            output = {
+                "derivative_post": voice_res.get("derivative_post"),
+                "derivative_reels": voice_res.get("derivative_reels"),
+                "derivative_stories": voice_res.get("derivative_stories"),
+                "suggested_task": voice_res.get("suggested_task")
+            }
         else:
             output = {"status": "completed", "action": action}
 

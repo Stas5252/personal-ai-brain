@@ -107,6 +107,7 @@ class TelegramAdapter(BaseChannelAdapter):
         if text:
             return self.handle_text(user_id=user_id, text=text)
         elif voice:
+            downloaded = False
             voice_path = voice.get("local_path") or voice.get("file_path") or message.get("voice_path")
             if not voice_path and self.is_configured() and voice.get("file_id"):
                 try:
@@ -114,12 +115,18 @@ class TelegramAdapter(BaseChannelAdapter):
                     api = TelegramHTTP(self.bot_token)
                     suffix = ".ogg" if message.get("voice") else Path(voice.get("file_name", "voice.mp3")).suffix or ".mp3"
                     voice_path = api.download(voice, suffix)
+                    downloaded = True
                 except Exception as e:
                     return {"status": "ERROR", "error": f"Failed to download voice: {e}"}
             if voice_path and Path(voice_path).exists():
-                return self.handle_voice(user_id=user_id, audio_path=Path(voice_path), caption=caption)
+                try:
+                    return self.handle_voice(user_id=user_id, audio_path=Path(voice_path), caption=caption)
+                finally:
+                    if downloaded:
+                        Path(voice_path).unlink(missing_ok=True)
             return {"status": "ERROR", "error": "Voice audio file unavailable for transcription"}
         elif photo:
+            downloaded = False
             photo_item = photo[-1] if isinstance(photo, list) else photo
             photo_path = photo_item.get("local_path") or photo_item.get("file_path") or message.get("photo_path")
             if not photo_path and self.is_configured() and photo_item.get("file_id"):
@@ -127,9 +134,14 @@ class TelegramAdapter(BaseChannelAdapter):
                     from src.brain.channels.telegram_runner import TelegramHTTP
                     api = TelegramHTTP(self.bot_token)
                     photo_path = api.download(photo_item, ".jpg")
+                    downloaded = True
                 except Exception as e:
                     return {"status": "ERROR", "error": f"Failed to download photo: {e}"}
             if photo_path and Path(photo_path).exists():
-                return self.handle_photo(user_id=user_id, photo_path=Path(photo_path), caption=caption)
+                try:
+                    return self.handle_photo(user_id=user_id, photo_path=Path(photo_path), caption=caption)
+                finally:
+                    if downloaded:
+                        Path(photo_path).unlink(missing_ok=True)
             return {"status": "ERROR", "error": "Photo file unavailable for vision analysis"}
         return None

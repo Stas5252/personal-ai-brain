@@ -165,17 +165,20 @@ class BrainService:
 
         # 1b. Audio Voice Processing
         if audio_path:
+            from pathlib import Path
+            from src.brain.knowledge.extractors.audio_extractor import AudioExtractor
+            ae = AudioExtractor()
+            derived_dir = Path("data/.derived")
+            derived_dir.mkdir(parents=True, exist_ok=True)
             try:
-                from pathlib import Path
-                from src.brain.knowledge.extractors.audio_extractor import AudioExtractor
-                ae = AudioExtractor()
-                derived_dir = Path("data/.derived")
-                derived_dir.mkdir(parents=True, exist_ok=True)
                 ext_res = ae.extract(Path(audio_path), source_id="voice_chat", derived_dir=derived_dir)
                 if ext_res.success and ext_res.raw_text:
                     query = f"{query}\n[Транскрипт аудиосообщения]: {ext_res.raw_text}"
-            except Exception:
-                pass
+                else:
+                    err_msg = ext_res.error_message or "Не удалось распознать речь в аудиофайле"
+                    query = f"{query}\n[Статус аудио: {err_msg}]"
+            except Exception as e:
+                query = f"{query}\n[Ошибка обработки аудио: {str(e)}]"
 
         # 2. Evaluate memory admission on the user's input (automatic memory learning)
         admission_result = None
@@ -290,8 +293,11 @@ class BrainService:
                     v_res = self.shooting_engine.critique_shot(img_item)
                     if v_res.get("status") == "AVAILABLE" and v_res.get("description"):
                         context_parts.append(f"### ПРЯМОЙ АНАЛИЗ ФОТОГРАФИИ (GEMINI VISION):\n{v_res['description']}")
-                except Exception:
-                    pass
+                    else:
+                        err_msg = v_res.get("error_message") or f"Анализ изображения недоступен (статус: {v_res.get('status', 'UNAVAILABLE')})"
+                        context_parts.append(f"### СТАТУС АНАЛИЗА ФОТОГРАФИИ: {err_msg}")
+                except Exception as e:
+                    context_parts.append(f"### ОШИБКА АНАЛИЗА ФОТОГРАФИИ: {str(e)}")
 
         system_message = "\n\n".join(context_parts)
         llm_messages = [{"role": "system", "content": system_message}]
@@ -510,6 +516,9 @@ class BrainService:
 
     def approve_workflow_step(self, workflow_id: str, approved: bool = True) -> WorkflowInstance:
         return self.workflow_engine.approve_step(workflow_id, approved)
+
+    def cancel_workflow(self, workflow_id: str) -> WorkflowInstance:
+        return self.workflow_engine.cancel_workflow(workflow_id)
 
     def get_workflow(self, workflow_id: str) -> Optional[WorkflowInstance]:
         return self.workflow_engine.get_workflow(workflow_id)

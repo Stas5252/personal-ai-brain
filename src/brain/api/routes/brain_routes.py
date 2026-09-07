@@ -9,6 +9,7 @@ from src.brain.models.knowledge import KnowledgeLayer
 from src.brain.models.style import ExemplarType, ExemplarCategory, StyleProfile
 from src.brain.models.client import ClientStatus
 from src.brain.models.project import ProjectStatus
+from src.brain.models.task import TaskPriority, TaskStatus, ApprovalState
 from src.brain.prompts.system_policy import UNIVERSAL_SYSTEM_POLICY
 from src.brain.services.brain_service import BrainService
 from src.brain.api.security import verify_brain_api_key
@@ -76,6 +77,33 @@ class ExemplarCreateRequest(BaseModel):
 class OnboardingAnswerRequest(BaseModel):
     session_id: str
     answer: str
+
+
+class WorkflowStartRequest(BaseModel):
+    workflow_type: str
+    initial_context: Optional[Dict[str, Any]] = None
+    name: Optional[str] = None
+
+
+class WorkflowApproveRequest(BaseModel):
+    approved: bool = True
+
+
+class TaskCreateRequest(BaseModel):
+    title: str
+    type: str = "general"
+    priority: TaskPriority = TaskPriority.MEDIUM
+    due_at: Optional[str] = None
+    project_id: Optional[str] = None
+    client_id: Optional[str] = None
+    inputs: Optional[Dict[str, Any]] = None
+    outputs: Optional[Dict[str, Any]] = None
+    approval_state: ApprovalState = ApprovalState.NONE
+
+
+class TaskUpdateRequest(BaseModel):
+    status: Optional[TaskStatus] = None
+    approval_state: Optional[ApprovalState] = None
 
 
 @router.post('/chat', dependencies=[Depends(verify_token)])
@@ -228,6 +256,97 @@ def list_clients():
 @router.get('/traces', dependencies=[Depends(verify_token)])
 def get_traces(limit: int = 20):
     return brain.get_traces(limit=limit)
+
+
+@router.post('/workflows/start', dependencies=[Depends(verify_token)])
+def start_workflow(req: WorkflowStartRequest):
+    wf = brain.start_workflow(req.workflow_type, initial_context=req.initial_context, name=req.name)
+    return wf.model_dump()
+
+
+@router.get('/workflows/{workflow_id}', dependencies=[Depends(verify_token)])
+def get_workflow(workflow_id: str):
+    wf = brain.get_workflow(workflow_id)
+    if not wf:
+        raise HTTPException(404, 'Workflow not found')
+    return wf.model_dump()
+
+
+@router.post('/workflows/{workflow_id}/execute', dependencies=[Depends(verify_token)])
+def execute_workflow_step(workflow_id: str):
+    try:
+        wf, output = brain.execute_workflow_step(workflow_id)
+        return {'workflow': wf.model_dump(), 'step_output': output}
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
+
+
+@router.post('/workflows/{workflow_id}/approve', dependencies=[Depends(verify_token)])
+def approve_workflow_step(workflow_id: str, req: Optional[WorkflowApproveRequest] = None):
+    approved = req.approved if req is not None else True
+    try:
+        wf = brain.approve_workflow_step(workflow_id, approved=approved)
+        return wf.model_dump()
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
+
+
+@router.post('/workflows/{workflow_id}/cancel', dependencies=[Depends(verify_token)])
+def cancel_workflow_step(workflow_id: str):
+    try:
+        wf = brain.cancel_workflow(workflow_id)
+        return wf.model_dump()
+    except ValueError as exc:
+        msg = str(exc)
+        if "not found" in msg.lower():
+            raise HTTPException(404, msg)
+        raise HTTPException(400, msg)
+
+
+@router.get('/tasks', dependencies=[Depends(verify_token)])
+def list_tasks(status: Optional[TaskStatus] = None, project_id: Optional[str] = None, client_id: Optional[str] = None):
+    tasks = brain.list_tasks(status=status, project_id=project_id, client_id=client_id)
+    return [t.model_dump() for t in tasks]
+
+
+@router.post('/tasks', dependencies=[Depends(verify_token)])
+def create_task(req: TaskCreateRequest):
+    task = brain.create_task(
+        title=req.title,
+        task_type=req.type,
+        priority=req.priority,
+        due_at=req.due_at,
+        project_id=req.project_id,
+        client_id=req.client_id,
+        inputs=req.inputs,
+        outputs=req.outputs,
+        approval_state=req.approval_state
+    )
+    return task.model_dump()
+
+
+@router.get('/tasks/{task_id}', dependencies=[Depends(verify_token)])
+def get_task(task_id: str):
+    task = brain.get_task(task_id)
+    if not task:
+        raise HTTPException(404, 'Task not found')
+    return task.model_dump()
+
+
+@router.patch('/tasks/{task_id}', dependencies=[Depends(verify_token)])
+def update_task(task_id: str, req: TaskUpdateRequest):
+    task = brain.get_task(task_id)
+    if not task:
+        raise HTTPException(404, 'Task not found')
+    st = req.status or task.status
+    updated = brain.update_task_status(task_id=task_id, status=st, approval_state=req.approval_state)
+    return updated.model_dump()
 
 
 get_user_profile = get_profile

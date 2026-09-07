@@ -254,7 +254,23 @@ class ShootingEngine:
     def analyze_reference(self, reference_description: str, use_llm: bool = True) -> Dict[str, Any]:
         """
         Deconstructs a visual reference into actionable photographic parameters.
+        Supports both textual reference descriptions and direct reference image files via Gemini Vision.
         """
+        ref_text = reference_description
+        from pathlib import Path
+        try:
+            cleaned_path_str = reference_description.strip().strip('"').strip("'")
+            p_ref = Path(cleaned_path_str)
+            if p_ref.is_file() and p_ref.suffix.lower() in [".jpg", ".jpeg", ".png", ".webp"]:
+                v_res = self.critique_shot(str(p_ref))
+                if v_res.get("status") == "AVAILABLE" and v_res.get("description"):
+                    ref_text = f"Визуальный референс (анализ Gemini Vision):\n{v_res['description']}"
+                else:
+                    err_msg = v_res.get("error_message") or f"статус: {v_res.get('status', 'UNAVAILABLE')}"
+                    ref_text = f"Файл референса: {p_ref.name} (анализ Gemini Vision не вернул описание: {err_msg})"
+        except Exception:
+            pass
+
         if use_llm:
             try:
                 import json
@@ -262,7 +278,7 @@ class ShootingEngine:
                 llm = LLMProvider()
                 prompt = (
                     "Ты — арт-директор и мастер студийного света для фотографов.\n"
-                    f"Разбери визуальный референс или кадр:\n«««\n{reference_description}\n»»»\n\n"
+                    f"Разбери визуальный референс или кадр:\n«««\n{ref_text}\n»»»\n\n"
                     "Декомпозируй его на профессиональные параметры:\n"
                     "1. Точная схема света (насадки, угол, рисующий/заполняющий/контровой).\n"
                     "2. Оптика и композиция (фокусное расстояние, диафрагма, ракурс, крупность плана).\n"
