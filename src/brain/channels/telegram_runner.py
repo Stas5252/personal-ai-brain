@@ -131,11 +131,19 @@ class Bot:
 
 
 def run_polling():
-    owner = os.environ.get('TELEGRAM_OWNER_ID', '').strip()
-    if not owner.isdigit() or not TELEGRAM_BOT_TOKEN:
-        raise RuntimeError('Set TELEGRAM_OWNER_ID and TELEGRAM_BOT_TOKEN in .env before starting.')
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError('Set TELEGRAM_BOT_TOKEN in .env before starting.')
     from src.brain.services.brain_service import BrainService
     state = RuntimeState(DATA_DIR / 'telegram_runtime.db')
+    owner = os.environ.get('TELEGRAM_OWNER_ID', '').strip()
+    if not owner.isdigit():
+        stored_owner = state.get('owner_id')
+        if stored_owner and str(stored_owner).isdigit():
+            owner = str(stored_owner)
+            log.info('Loaded existing Telegram owner ID: %s', owner)
+        else:
+            owner = ''
+            log.info('TELEGRAM_OWNER_ID is not configured. First user to send a private message will become the owner.')
     api = TelegramHTTP(TELEGRAM_BOT_TOKEN)
     bot = Bot(api, BrainService(), state, owner)
     stop = threading.Event()
@@ -160,8 +168,8 @@ def run_polling():
                         log.error('Message processing failed for update %s', ident)
                         reply = 'Не удалось обработать запрос. Проверь настройки и повтори сообщение.'
                     state.put(cache_key, reply)
-                if reply:
-                    api.send(owner, reply)
+                if reply and bot.owner:
+                    api.send(bot.owner, reply)
                 state.finish(ident, True)
                 state.put(cache_key, '')
             except Exception:
@@ -176,7 +184,14 @@ def run_polling():
                 updates = api.call('getUpdates', {'offset': state.get('offset', 0), 'timeout': 25,
                                                  'allowed_updates': ['message']})
                 for update in updates:
-                    if not owner_allowed(update.get('message', {}), owner):
+                    msg = update.get('message', {})
+                    if not bot.owner:
+                        sender_id = msg.get('from', {}).get('id')
+                        if msg.get('chat', {}).get('type') == 'private' and sender_id:
+                            bot.owner = str(sender_id)
+                            state.put('owner_id', bot.owner)
+                            log.info('Auto-registered Telegram owner ID: %s', bot.owner)
+                    if not owner_allowed(msg, bot.owner):
                         update = {'update_id': update['update_id']}
                     state.enqueue(update)
             except Exception:
