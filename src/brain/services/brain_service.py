@@ -216,7 +216,25 @@ class BrainService:
             dialogue_analysis = self.sales_engine.analyze_client_dialogue(query)
             strat = dialogue_analysis.get('recommended_strategy', '')
             meaning = dialogue_analysis.get('what_client_really_means', '')
-            routing.specialized_system_prompt += f"\n\nДиагностика клиента: стадия {dialogue_analysis['detected_stage']}, возражения {dialogue_analysis['detected_objections']}. Что клиент имеет в виду: {meaning}. Стратегия: {strat}"
+            q_lower_check = query.lower()
+            if any(w in q_lower_check for w in ["дорого", "потян", "бюджет", "нет денег", "подума", "скидк"]):
+                yaishka_obj = self.sales_engine.handle_objection_yaishka_style(query)
+                routing.specialized_system_prompt += (
+                    f"\n\n### ЭТАЛОННЫЙ ОТВЕТ НА ВОЗРАЖЕНИЕ (МЕТОДОЛОГИЯ СЕРВИСА «ЯИШКА»):\n"
+                    f"Обязательно раздели свой ответ на две чёткие карточки:\n\n"
+                    f"#### 1. Карточка «Сообщение клиентке»:\n"
+                    f"- Тёплая эмпатичная валидация чувств: покажи, что искренне понимаешь («понимаю вас, правда 🤍; когда съемку очень хочется, но бюджет сейчас не позволяет — это абсолютно нормально»).\n"
+                    f"- Ни в коем случае НЕ делай скидок на основной пакет (защищай ценность труда).\n"
+                    f"- Примени 'Правило двух выборов': предложи РОВНО ДВА комфортных варианта (мини-съёмка в более коротком формате [длительность, стоимость, сколько фото] ИЛИ сохранить основной формат с делением оплаты на 2 части / через сервис 'Долями').\n"
+                    f"- Оставь дверь открытой: «Посмотрите, какой вариант вам был бы удобнее. А если пока неактуально — оставайтесь со мной, я периодически делаю фотодни и короткие форматы 🤍».\n\n"
+                    f"#### 2. Карточка «Методический совет фотографу (Правило двух выборов)»:\n"
+                    f"- Объясни, почему важно дать ровно два выбора (не превращать сообщение в меню из 10 способов 'ну пожалуйста, купите').\n"
+                    f"- Как это сохраняет ценность основной съёмки и статус эксперта.\n"
+                    f"Готовый шаблон: {yaishka_obj.get('client_message')}\n"
+                    f"Методика: {yaishka_obj.get('methodological_advice')}"
+                )
+            else:
+                routing.specialized_system_prompt += f"\n\nДиагностика клиента: стадия {dialogue_analysis['detected_stage']}, возражения {dialogue_analysis['detected_objections']}. Что клиент имеет в виду: {meaning}. Стратегия: {strat}"
         elif routing.primary_intent == IntentType.DAILY_PLAN or routing.workflow_suggested == "daily_planning":
             plan = self.proactive_engine.generate_daily_plan(profile=profile)
             p_lines = "\n".join([f"Приоритет {p['priority_level']} [{p['domain']}]: {p['title']} — {p['action']}" for p in plan["priorities"]])
@@ -233,14 +251,36 @@ class BrainService:
             routing.specialized_system_prompt += f"\n\nАудит профиля и ленты:\n- Сильные стороны: {audit_res['strengths']}\n- Точки роста: {audit_res['growth_points']}\n- Навигация актуального: {audit_res['highlights_recommendation']}\n- Шахматный ритм ленты: {audit_res['grid_rhythm_advice']}\n- Шаги: {audit_res['action_steps']}"
         elif routing.primary_intent == IntentType.DISPUTE or routing.workflow_suggested == "dispute_mediation":
             disp_res = self.sales_engine.mediate_client_dispute(query, profile=profile)
-            routing.specialized_system_prompt += f"\n\nМедиация спора с клиентом:\n- Просадка фотографа: {disp_res['photographer_slippage']}\n- В чем права клиентка: {disp_res['client_justified_points']}\n- Где перегибает: {disp_res['client_overstepping_points']}\n- Скрипт: {disp_res['ready_response_script']}"
+            routing.specialized_system_prompt += (
+                f"\n\n### ЭТАЛОННАЯ МЕДИАЦИЯ СПОРА С КЛИЕНТОМ (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"Разбери ситуацию именно с точки зрения сервиса фотографа по 4 ключевым блокам:\n"
+                f"1. **Где моя просадка**: трезво укажи, где фотограф сам допустил ошибку в коммуникации или фиксации договоренностей.\n"
+                f"2. **Где права клиентка**: в чем эмоции или желания клиента объяснимы.\n"
+                f"3. **Где клиентка перегибает / нарушает профессиональные границы**: почему требование отдать сырые RAW/полуфабрикат неправомерно.\n"
+                f"4. **Готовый вежливый ответ и дальнейшая стратегия**: дипломатичный скрипт для клиентки, сохраняющий границы и предлагающий конструктивное решение.\n"
+                f"Анализ просадки: {disp_res['photographer_slippage']}\n"
+                f"Права клиентка: {disp_res['client_justified_points']}\n"
+                f"Перегиб: {disp_res['client_overstepping_points']}\n"
+                f"Скрипт: {disp_res['ready_response_script']}"
+            )
         elif routing.primary_intent == IntentType.MUSIC or routing.workflow_suggested == "music_selection":
             music_res = self.shooting_engine.recommend_music_soundtrack(query)
             t_titles = [f"{t['title']} ({t['genre']}): {t['artistic_rationale']}" for t in music_res.get("tracks", [])]
             routing.specialized_system_prompt += f"\n\nПодбор треков под серию:\n" + "\n".join(t_titles)
         elif routing.primary_intent == IntentType.PRICING or routing.workflow_suggested == "pricing_strategy":
             price_guide = self.sales_engine.generate_three_tier_price_guide(profile=profile)
-            routing.specialized_system_prompt += f"\n\nПрайс-лист фотографа (3 тарифа):\n" + "\n".join([f"- {t['name']} ({t['price']}): {', '.join(t['features'][:3])}" for t in price_guide["tiers"]])
+            t_desc = "\n".join([f"- {t['name']} ({t['price']}): {t['subtitle']} | Наполнение: {', '.join(t['features'][:4])}" for t in price_guide["tiers"]])
+            g_desc = "\n".join([f"• {g}" for g in price_guide["guarantees"]])
+            routing.specialized_system_prompt += (
+                f"\n\n### ЭТАЛОННЫЙ ПРАЙС-ЛИСТ (МЕТОДОЛОГИЯ «ЯИШКА»):\n"
+                f"Оформи эстетичный прайс-лист для фотографа по 'Правилу трех тарифов':\n"
+                f"- Заголовок: **П Р А Й С** (*Фотосъемка для тех, кто ценит качество*)\n"
+                f"- 3 тарифа: 'ЛАЙТ' (Минимум. Ничего лишнего), 'ОПТИМАЛЬНЫЙ' [🔥 САМЫЙ ПОПУЛЯРНЫЙ] (Баланс времени и результата), 'ПРЕМИУМ' (Полный день. Полная история).\n"
+                f"- Подробное наполнение каждого тарифа (время, количество фото в базовой и авторской ретуши, локации, образы, помощь в позировании).\n"
+                f"- Нижняя панель гарантий:\n{g_desc}\n"
+                f"- Фирменный слоган в конце: *Давайте создавать красоту вместе. 🤍*\n\n"
+                f"Тарифная сетка:\n{t_desc}"
+            )
         elif routing.primary_intent == IntentType.PHOTO or routing.workflow_suggested == "shoot_preparation":
             default_genre = (getattr(profile, "genres", None) and profile.genres[0]) or (getattr(profile, "services", None) and profile.services[0]) or getattr(profile, "niche", "Портрет") or "Портрет"
             v_logic = self.shooting_engine.build_visual_logic(query, genre=default_genre)

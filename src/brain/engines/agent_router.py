@@ -44,7 +44,10 @@ INTENT_KEYWORDS: Dict[IntentType, List[str]] = {
     IntentType.TASK: ["задач", "дедлайн", "создай задачу", "напомни", "контроль"],
     IntentType.DAILY_PLAN: ["что мне сегодня делать", "что делать", "план на день", "с чего начать", "приоритеты на сегодня"],
     IntentType.MUSIC: ["трек", "треки", "музык", "саундтрек", "подбор треков", "песня", "аудиодорожк", "фоновая музык"],
-    IntentType.DISPUTE: ["спор", "конфликт", "спорная ситуация", "претензи", "недовольн", "требует исходник", "докопал", "жалоб", "скандал", "разбор ситуации"]
+    IntentType.DISPUTE: [
+        "спор", "конфликт", "спорная ситуация", "претензи", "недовольн", "требует исходник",
+        "докопал", "жалоб", "скандал", "разбор ситуации", "исходники raw", "отдать raw", "исходники", "не по договору"
+    ]
 }
 
 SPECIALIZED_PROMPTS: Dict[IntentType, str] = {
@@ -86,6 +89,8 @@ class AgentRouter:
                     score += weight
             if score > 0:
                 matched_scores[intent] = score
+        if any(w in q_lower for w in ["спорн", "конфликт", "претензи", "требует исходник", "отдать raw", "исходники raw"]):
+            matched_scores[IntentType.DISPUTE] = matched_scores.get(IntentType.DISPUTE, 0) + 10
         if not matched_scores:
             return RoutingDecision(
                 primary_intent=IntentType.GENERAL,
