@@ -218,7 +218,29 @@ class BrainService:
             meaning = dialogue_analysis.get('what_client_really_means', '')
             q_lower_check = query.lower()
             if any(w in q_lower_check for w in ["дорого", "потян", "бюджет", "нет денег", "подума", "скидк"]):
-                yaishka_obj = self.sales_engine.handle_objection_yaishka_style(query)
+                import re
+                extracted_price = None
+                extracted_service = None
+                if profile:
+                    if getattr(profile, 'pricing', None) and isinstance(profile.pricing, dict):
+                        for k, v in profile.pricing.items():
+                            extracted_service = k
+                            nums = re.findall(r'\d+', str(v).replace(' ', ''))
+                            if nums:
+                                extracted_price = int(nums[0])
+                                break
+                    if not extracted_service and getattr(profile, 'services', None) and profile.services:
+                        extracted_service = profile.services[0]
+
+                c_name_match = re.search(r'\b([А-ЯЁ][а-яё]+)(?:,|!|\s)', query)
+                c_name = c_name_match.group(1) if c_name_match else None
+
+                yaishka_obj = self.sales_engine.handle_objection_yaishka_style(
+                    query,
+                    client_name=c_name,
+                    service=extracted_service,
+                    base_price=extracted_price
+                )
                 routing.specialized_system_prompt += (
                     f"\n\n### ЭТАЛОННЫЙ ОТВЕТ НА ВОЗРАЖЕНИЕ (МЕТОДОЛОГИЯ СЕРВИСА «ЯИШКА»):\n"
                     f"Обязательно раздели свой ответ на две чёткие карточки:\n\n"

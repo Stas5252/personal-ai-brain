@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brain / Рабочая студия</title>
 <style>
-:root{--paper:oklch(97% .008 145);--ink:oklch(25% .012 145);--muted:oklch(48% .012 145);--line:oklch(83% .012 145);--accent:oklch(39% .08 145);--surface:oklch(99% .004 145);--error:oklch(43% .15 25)}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif}header{padding:24px 5vw;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px}.wordmark{font-weight:750;font-size:24px;letter-spacing:-.06em}.label{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}main{max-width:1400px;margin:auto;padding:40px 5vw;display:grid;grid-template-columns:280px minmax(0,1fr);gap:64px}h1{font-size:clamp(28px,4vw,44px);letter-spacing:-.04em;line-height:1.15;margin:0 0 16px}h2{font-size:20px;margin:24px 0 12px}p{max-width:68ch}aside{border-right:1px solid var(--line);padding-right:24px}label{display:block;font-size:14px;margin:12px 0 4px}input,textarea,button{font:inherit}input,textarea{width:100%;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px}textarea{resize:vertical;min-height:110px}button{min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);cursor:pointer}button:hover{border-color:var(--accent)}button:active{transform:translateY(1px)}button:disabled{opacity:.45;cursor:wait}.primary{background:var(--accent);color:var(--surface);border-color:var(--accent)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hint{font-size:14px;color:var(--muted)}#status{min-height:24px;margin:16px 0;color:var(--muted);overflow-wrap:anywhere}#status.error{color:var(--error)}#messages{padding:16px 0 32px;min-height:160px;max-height:55vh;overflow:auto}article{padding:24px 0;border-bottom:1px solid var(--line);max-width:72ch}article strong{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}article p{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}article button{margin-top:12px;font-size:14px}.actions{display:flex;flex-direction:column;gap:8px;margin:20px 0}.actions button{text-align:left}details{padding:12px 0;border-bottom:1px solid var(--line)}summary{cursor:pointer;padding:8px 0;font-weight:600}.compose{border-top:1px solid var(--line);padding-top:20px}#key{max-width:420px}#profile-note{white-space:pre-wrap}#logout{display:none}footer{padding:16px 5vw;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}@media(max-width:850px){main{grid-template-columns:1fr;gap:24px;padding:24px 5vw}aside{border:0;padding:0}.actions{flex-direction:row;overflow:auto}.actions button{flex-shrink:0}#messages{max-height:50vh}header .label{display:none}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}
+:root{--paper:oklch(97% .008 145);--ink:oklch(25% .012 145);--muted:oklch(48% .012 145);--line:oklch(83% .012 145);--accent:oklch(39% .08 145);--surface:oklch(99% .004 145);--error:oklch(43% .15 25)}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.5 system-ui,sans-serif}header{padding:24px 5vw;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:16px}.wordmark{font-weight:750;font-size:24px;letter-spacing:-.06em}.label{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}main{max-width:1400px;margin:auto;padding:40px 5vw;display:grid;grid-template-columns:280px minmax(0,1fr);gap:64px}h1{font-size:clamp(28px,4vw,44px);letter-spacing:-.04em;line-height:1.15;margin:0 0 16px}h2{font-size:20px;margin:24px 0 12px}p{max-width:68ch}aside{border-right:1px solid var(--line);padding-right:24px}label{display:block;font-size:14px;margin:12px 0 4px}input,textarea,button{font:inherit}input,textarea{width:100%;padding:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink);border-radius:6px}textarea{resize:vertical;min-height:110px}button{min-height:44px;padding:10px 16px;border:1px solid var(--line);border-radius:6px;background:var(--surface);color:var(--ink);cursor:pointer}button:hover{border-color:var(--accent)}button:active{transform:translateY(1px)}button:disabled{opacity:.45;cursor:wait}.primary{background:var(--accent);color:var(--surface);border-color:var(--accent)}:focus-visible{outline:3px solid var(--accent);outline-offset:3px}.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.hint{font-size:14px;color:var(--muted)}#status{min-height:24px;margin:16px 0;color:var(--muted);overflow-wrap:anywhere}#status.error{color:var(--error)}#messages{padding:16px 0 32px;min-height:160px;max-height:55vh;overflow:auto}article{padding:24px 0;border-bottom:1px solid var(--line);max-width:72ch}article strong{display:block;font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:8px}article p{white-space:pre-wrap;overflow-wrap:anywhere;margin:0}article button{margin-top:12px;font-size:14px}.actions{display:flex;flex-direction:column;gap:8px;margin:20px 0}.actions button{text-align:left}details{padding:12px 0;border-bottom:1px solid var(--line)}summary{cursor:pointer;padding:8px 0;font-weight:600}.compose{border-top:1px solid var(--line);padding-top:20px}#key{max-width:420px}#profile-note{white-space:pre-wrap}#logout{display:none}footer{padding:16px 5vw;color:var(--muted);font-size:12px;border-top:1px solid var(--line)}@media(max-width:850px){main{grid-template-columns:1fr;gap:24px;padding:24px 5vw}aside{border:0;padding:0}.actions{flex-direction:row;overflow:auto}.actions button{flex-shrink:0}#messages{max-height:50vh}header .label{display:none}}@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}}.rich-body{line-height:1.65;color:var(--ink);overflow-wrap:anywhere}.rich-body h2{font-size:18px;margin:18px 0 8px;font-weight:700}.rich-body h3{font-size:16px;margin:16px 0 8px;font-weight:700}.rich-body h4{font-size:13px;margin:14px 0 6px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}.rich-body ul{margin:8px 0;padding-left:22px}.rich-body li{margin-bottom:6px}.rich-body blockquote{margin:12px 0;padding:8px 14px;border-left:3px solid var(--accent);background:var(--surface);border-radius:0 6px 6px 0}.swatch{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;background:var(--surface);border:1px solid var(--line);border-radius:4px;font-size:13px;vertical-align:middle;margin:0 2px}.swatch-dot{width:14px;height:14px;border-radius:50%;border:1px solid rgba(0,0,0,0.15);flex-shrink:0;box-shadow:inset 0 0 1px rgba(0,0,0,0.3)}.divider{border:0;border-top:1px solid var(--line);margin:16px 0}
 </style></head><body>
 <header><div class="wordmark">brain<span class="label"> / Photographer workspace</span></div><button id="logout">Отключиться</button></header>
 <main><aside><div class="label">Личный помощник</div><h2>Работа, а не промпты.</h2><p class="hint">Твои материалы, контекст и задачи в одном диалоге.</p>
@@ -20,7 +20,115 @@ const $=id=>document.getElementById(id);let key='',history=[],profile={},busy=fa
 function status(text,error=false){$('status').textContent=text;$('status').className=error?'error':'';}
 function lock(value){busy=value;document.querySelectorAll('button,input,textarea').forEach(el=>el.disabled=value);}
 async function request(path,options={}){if(!key)throw Error('Сначала подключись с ключом доступа.');const response=await fetch(path,{...options,headers:{...options.headers,Authorization:'Bearer '+key}});let data;try{data=await response.json();}catch{throw Error('Сервер вернул нечитаемый ответ.');}if(!response.ok)throw Error(typeof data.detail==='string'?data.detail:'Запрос не выполнен: '+response.status);return data;}
-function message(role,text){$('empty')?.remove();const article=document.createElement('article'),title=document.createElement('strong'),body=document.createElement('p');title.textContent=role==='user'?'Ты':'Brain';body.textContent=text;article.append(title,body);if(role==='assistant'){const copy=document.createElement('button');copy.textContent='Копировать';copy.addEventListener('click',async()=>{try{await navigator.clipboard.writeText(text);copy.textContent='Скопировано';}catch{status('Копирование недоступно. Выдели текст вручную.',true);}});article.append(copy);}$('messages').append(article);$('messages').scrollTop=$('messages').scrollHeight;}
+function appendFormattedInline(parent,text){
+  const tokenRegex=/(\*\*[^*]+\*\*|#[A-Fa-f0-9]{6}\b)/g;
+  let lastIndex=0,match;
+  while((match=tokenRegex.exec(text))!==null){
+    if(match.index>lastIndex){
+      parent.append(document.createTextNode(text.slice(lastIndex,match.index)));
+    }
+    const token=match[0];
+    if(token.startsWith('**')&&token.endsWith('**')){
+      const strong=document.createElement('strong');
+      strong.textContent=token.slice(2,-2);
+      parent.append(strong);
+    }else if(token.startsWith('#')){
+      const swatch=document.createElement('span');
+      swatch.className='swatch';
+      const dot=document.createElement('span');
+      dot.className='swatch-dot';
+      dot.style.background=token;
+      const code=document.createElement('code');
+      code.textContent=token;
+      swatch.append(dot,code);
+      parent.append(swatch);
+    }
+    lastIndex=tokenRegex.lastIndex;
+  }
+  if(lastIndex<text.length){
+    parent.append(document.createTextNode(text.slice(lastIndex)));
+  }
+}
+function renderRichDOM(container,raw){
+  const lines=raw.split('\n');
+  let currentList=null;
+  for(let line of lines){
+    let trimmed=line.trim();
+    if(trimmed==='---'||trimmed==='***'){
+      currentList=null;
+      const hr=document.createElement('hr');
+      hr.className='divider';
+      container.append(hr);
+      continue;
+    }
+    if(trimmed.startsWith('#### ')){
+      currentList=null;
+      const h4=document.createElement('h4');
+      h4.textContent=trimmed.slice(5);
+      container.append(h4);
+      continue;
+    }
+    if(trimmed.startsWith('### ')){
+      currentList=null;
+      const h3=document.createElement('h3');
+      h3.textContent=trimmed.slice(4);
+      container.append(h3);
+      continue;
+    }
+    if(trimmed.startsWith('## ')){
+      currentList=null;
+      const h2=document.createElement('h2');
+      h2.textContent=trimmed.slice(3);
+      container.append(h2);
+      continue;
+    }
+    if(trimmed.startsWith('> ')){
+      currentList=null;
+      const bq=document.createElement('blockquote');
+      appendFormattedInline(bq,trimmed.slice(2));
+      container.append(bq);
+      continue;
+    }
+    if(trimmed.startsWith('* ')||trimmed.startsWith('- ')||trimmed.startsWith('• ')){
+      if(!currentList){
+        currentList=document.createElement('ul');
+        container.append(currentList);
+      }
+      const li=document.createElement('li');
+      appendFormattedInline(li,trimmed.replace(/^[\*\-•]\s*/,''));
+      currentList.append(li);
+      continue;
+    }
+    currentList=null;
+    if(trimmed===''){
+      container.append(document.createElement('br'));
+    }else{
+      const p=document.createElement('p');
+      p.style.margin='4px 0';
+      appendFormattedInline(p,trimmed);
+      container.append(p);
+    }
+  }
+}
+function message(role,text){
+  $('empty')?.remove();
+  const article=document.createElement('article'),title=document.createElement('strong'),body=document.createElement('div');
+  title.textContent=role==='user'?'Ты':'Brain';
+  if(role==='assistant'){body.className='rich-body';renderRichDOM(body,text);}
+  else{body.className='user-body';body.textContent=text;body.style.whiteSpace='pre-wrap';}
+  article.append(title,body);
+  if(role==='assistant'){
+    const copy=document.createElement('button');
+    copy.textContent='Копировать';
+    copy.addEventListener('click',async()=>{
+      try{await navigator.clipboard.writeText(text);copy.textContent='Скопировано';}
+      catch{status('Копирование недоступно. Выдели текст вручную.',true);}
+    });
+    article.append(copy);
+  }
+  $('messages').append(article);
+  $('messages').scrollTop=$('messages').scrollHeight;
+}
 function renderProfile(){for(const [id,field] of [['name','identity'],['city','city'],['niche','niche'],['tone','tone']])$(id).value=profile[field]||'';$('profile-note').textContent=profile.identity?profile.identity+' · '+(profile.niche||'ниша не указана'):'Профиль пока не заполнен.';}
 let activeWf=null;
 function renderWf(){if(!activeWf||activeWf.status==='COMPLETED'||activeWf.status==='CANCELLED'){$('wf-active').style.display='none';return;}$('wf-active').style.display='block';$('wf-title').textContent=activeWf.name||activeWf.workflow_type;const curr=activeWf.steps[activeWf.current_step];$('wf-step').textContent=`Шаг ${activeWf.current_step+1}/${activeWf.steps.length}: ${curr?curr.description:''}`;if(activeWf.status==='WAITING_APPROVAL'){$('wf-appr').style.display='inline-block';$('wf-exec').disabled=true;}else{$('wf-appr').style.display='none';$('wf-exec').disabled=busy;}}
