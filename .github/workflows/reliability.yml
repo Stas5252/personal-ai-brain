@@ -19,9 +19,25 @@ jobs:
       - run: pip install -r requirements.txt
       - run: python -m compileall -q src
       - name: Deterministic regression suite (no real API calls)
-        run: python -m pytest tests/reliability -v --junitxml=reliability-results.xml
+        shell: bash
+        run: |
+          set +e
+          python -m pytest "$GITHUB_WORKSPACE/tests/reliability" -v --junitxml="$GITHUB_WORKSPACE/reliability-results.xml" > reliability-log.txt 2>&1
+          result=$?
+          cat reliability-log.txt
+          if [ "$result" -ne 0 ]; then
+            python - <<'PY'
+          import pathlib
+          text = pathlib.Path('reliability-log.txt').read_text()[-18000:]
+          text = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          print('::error title=Regression diagnostics::' + text)
+          PY
+          fi
+          exit "$result"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: reliability-results
-          path: reliability-results.xml
+          path: |
+            reliability-results.xml
+            reliability-log.txt

@@ -1,8 +1,12 @@
 """Isolate before test collection: imports can create databases and indexes."""
 import os
+import sys
+import shutil
 import tempfile
 from pathlib import Path
 
+_REPOSITORY = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(_REPOSITORY))
 _TEST_ROOT = tempfile.TemporaryDirectory(prefix='brain-tests-')
 _ROOT = Path(_TEST_ROOT.name)
 os.environ['ENV'] = 'test'
@@ -22,5 +26,9 @@ cfg.DERIVED_DIR = cfg.STORAGE_DIR / 'derived'
 cfg.VECTOR_DB_DIR = _ROOT / 'vectors'
 for path in (cfg.DATA_DIR, cfg.STORAGE_DIR, cfg.ORIGINALS_DIR, cfg.DERIVED_DIR, cfg.VECTOR_DB_DIR):
     path.mkdir(parents=True, exist_ok=True)
-# Some legacy extractors use relative data/ paths. Keep those inside the test root too.
+for name in ('fixtures', 'pilot_corpus'):
+    source = _REPOSITORY / 'tests' / name
+    if source.is_dir():
+        shutil.copytree(source, _ROOT / 'tests' / name)
+# Relative data/ paths cannot reach production storage; imports still use the checkout.
 os.chdir(_ROOT)
