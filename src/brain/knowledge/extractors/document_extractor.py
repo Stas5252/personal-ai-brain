@@ -1,408 +1,294 @@
-"""
-Document Extractor for PDF, DOCX, PPTX, XLSX, TXT, MD, and HTML.
-Preserves structural hierarchy, page numbers, slide numbers, and table schemas.
-"""
-import os
-import re
-import json
-from pathlib import Path
-from typing import List, Optional, Dict, Any
-from bs4 import BeautifulSoup
-import docx
-import pptx
-import openpyxl
-import fitz  # PyMuPDF
+"""Document extraction without sidecars or invented scanned-page contents.
 
+Format libraries are loaded on demand. PDF OCR uses OCREngine.extract_text.
+Unreadable scanned pages fail the import. Visual diagrams are not interpreted
+by this text/OCR extractor; coverage is explicit in media_info.
+"""
+import math
+import tempfile
+from pathlib import Path
+from typing import Optional
 from src.brain.knowledge.extractors.base import BaseExtractor
-from src.brain.models.file_metadata import ExtractionResult, ExtractedElement
 from src.brain.knowledge.extractors.ocr_engine import OCREngine
+from src.brain.models.file_metadata import ExtractionResult, ExtractedElement
+
 
 class DocumentExtractor(BaseExtractor):
     SUPPORTED_EXTS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html", ".htm"}
 
+    def __init__(self, ocr_engine=None, max_pdf_pages: int = 2000,
+                 max_render_pixels: int = 20_000_000, min_ocr_confidence: float = 0.5):
+        if max_pdf_pages <= 0 or max_render_pixels <= 0:
+            raise ValueError("PDF limits must be positive")
+        if not 0 <= min_ocr_confidence <= 1:
+            raise ValueError("min_ocr_confidence must be between 0 and 1")
+        self._ocr = ocr_engine
+        self.max_pdf_pages = max_pdf_pages
+        self.max_render_pixels = max_render_pixels
+        self.min_ocr_confidence = min_ocr_confidence
+
     def can_handle(self, extension: str, mime_type: str) -> bool:
         return extension.lower() in self.SUPPORTED_EXTS
 
-    def extract(self, file_path: Path, source_id: str = "default_source", derived_dir: Optional[Path] = None) -> ExtractionResult:
-        p = Path(file_path)
-        ext = p.suffix.lower()
-        if derived_dir is None:
-            derived_dir = p.parent / ".derived"
-        derived_dir.mkdir(parents=True, exist_ok=True)
+    @staticmethod
+    def _result(source_id, elements, info, page_count=None, error=None):
+        elements = [e for e in elements if e.content.strip()]
+        return ExtractionResult(source_id=source_id, success=bool(elements) and error is None,
+                                elements=elements, raw_text="\n\n".join(e.content for e in elements),
+                                page_count=page_count, media_info=info,
+                                error_message=error or (None if elements else "Document contains no usable text"))
 
+    def extract(self, file_path: Path, source_id: str = "default_source",
+                derived_dir: Optional[Path] = None) -> ExtractionResult:
+        p = Path(file_path)
         try:
+            if not p.is_file():
+                raise FileNotFoundError("Document file does not exist")
+            if not self.can_handle(p.suffix, ""):
+                raise ValueError("Unsupported document extension: " + p.suffix)
+            ext = p.suffix.lower()
             if ext == ".pdf":
-                return self._extract_pdf(p, source_id, derived_dir)
-            elif ext == ".docx":
+                dest = Path(derived_dir) if derived_dir else p.parent / ".derived"
+                dest.mkdir(parents=True, exist_ok=True)
+                return self._extract_pdf(p, source_id, dest)
+            if ext == ".docx":
                 return self._extract_docx(p, source_id)
-            elif ext == ".pptx":
+            if ext == ".pptx":
                 return self._extract_pptx(p, source_id)
-            elif ext == ".xlsx":
+            if ext == ".xlsx":
                 return self._extract_xlsx(p, source_id)
-            elif ext in [".html", ".htm"]:
+            if ext in {".html", ".htm"}:
                 return self._extract_html(p, source_id)
-            elif ext in [".txt", ".md"]:
-                return self._extract_text_md(p, source_id)
-            else:
-                return ExtractionResult(
-                    source_id=source_id,
-                    success=False,
-                    error_message=f"Unsupported document extension: {ext}"
-                )
-        except Exception as e:
-            return ExtractionResult(
-                source_id=source_id,
-                success=False,
-                error_message=f"Extraction failed for {p.name}: {str(e)}"
-            )
+            return self._extract_text_md(p, source_id)
+        except Exception as exc:
+            return ExtractionResult(source_id=source_id, success=False,
+                                    error_message="Document extraction failed: " + str(exc),
+                                    media_info={"format": p.suffix.lstrip(".").upper()})
 
     def _extract_pdf(self, path: Path, source_id: str, derived_dir: Path) -> ExtractionResult:
-        doc = fitz.open(str(path))
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-        page_count = len(doc)
-        current_heading = ""
-
-        for page_idx in range(page_count):
-            page_num = page_idx + 1
-            page = doc[page_idx]
-            text = page.get_text().strip()
-
-            # Detect scanned page (empty or very short text)
-            if len(text) < 40:
-                # Render page image for OCR / Visual inspection
-                pix = page.get_pixmap(dpi=150)
-                scan_img_path = derived_dir / f"scan_page_{page_num}.png"
-                pix.save(str(scan_img_path))
-
-                # Check if OCR sidecar exists alongside PDF or in pilot corpus
-                clean_name = path.name.split("_", 1)[-1] if "_" in path.name else path.name
-                clean_stem = path.stem.split("_", 1)[-1] if "_" in path.stem else path.stem
-                sidecar_candidates = [
-                    path.parent / f"{path.stem}.meta.json",
-                    path.parent / f"{path.stem}.ocr.json",
-                    path.parent / f"{path.name}.ocr.json",
-                    path.parent / f"{clean_stem}.meta.json",
-                    path.parent / f"{clean_stem}.ocr.json",
-                    path.parent / f"{clean_stem}.json",
-                    Path("tests/pilot_corpus") / f"{clean_stem}.meta.json",
-                    Path("tests/pilot_corpus") / f"{clean_stem}.ocr.json",
-                    Path("tests/pilot_corpus") / "sample_scanned_receipt.meta.json"
-                ]
-
-                sidecar_ocr = None
-                for sc in sidecar_candidates:
-                    if sc.exists():
-                        try:
-                            with open(sc, "r", encoding="utf-8") as f:
-                                sc_json = json.load(f)
-                                sidecar_ocr = sc_json.get("ocr_text")
-                                if sidecar_ocr:
-                                    break
-                        except Exception:
-                            pass
-
-                if not sidecar_ocr:
+        import fitz
+        elements, reports, failed = [], [], []
+        with fitz.open(str(path)) as document:
+            if document.needs_pass:
+                raise ValueError("PDF is password-protected; provide an unlocked copy")
+            count = len(document)
+            if count > self.max_pdf_pages:
+                raise ValueError("PDF exceeds configured page limit")
+            with tempfile.TemporaryDirectory(prefix="pdf-", dir=derived_dir) as scratch:
+                for index in range(count):
+                    number = index + 1
                     try:
-                        ocr_res = OCREngine.get_instance().ocr_image(scan_img_path)
-                        if ocr_res and ocr_res.get("text"):
-                            sidecar_ocr = ocr_res["text"].strip()
-                    except Exception:
-                        pass
+                        page = document[index]
+                        text = page.get_text().strip()
+                        if text:
+                            elements.append(ExtractedElement(element_type="paragraph", content=text,
+                                                            page_number=number, heading_path=f"Страница {number}",
+                                                            metadata={"provenance": "pdf_text"}))
+                            reports.append({"page": number, "status": "TEXT", "visual_content_analyzed": False})
+                            continue
+                        if not page.get_images() and not page.get_drawings():
+                            reports.append({"page": number, "status": "BLANK"})
+                            continue
+                        engine = self._ocr if self._ocr is not None else OCREngine.get_instance()
+                        if not engine.is_available:
+                            raise ValueError("OCR unavailable for scanned page")
+                        dpi = 150
+                        area = math.ceil(page.rect.width * dpi / 72) * math.ceil(page.rect.height * dpi / 72)
+                        if area > self.max_render_pixels:
+                            raise ValueError("Rendered PDF page exceeds pixel limit")
+                        rendered = Path(scratch) / f"page-{number}.png"
+                        page.get_pixmap(dpi=dpi).save(str(rendered))
+                        text, confidence = engine.extract_text(rendered)
+                        if not isinstance(text, str):
+                            raise ValueError("OCR returned non-text content")
+                        confidence = float(confidence)
+                        if not text.strip() or not math.isfinite(confidence) or not self.min_ocr_confidence <= confidence <= 1:
+                            raise ValueError("Scanned page has no reliable OCR text")
+                        elements.append(ExtractedElement(element_type="ocr", content=text.strip(),
+                                                        page_number=number, heading_path=f"Страница {number}",
+                                                        metadata={"provenance": "ocr", "confidence": confidence,
+                                                                  "needs_review": True}))
+                        reports.append({"page": number, "status": "OCR", "confidence": confidence})
+                    except Exception as exc:
+                        failed.append(number)
+                        reports.append({"page": number, "status": "FAILED", "error": str(exc)})
+        info = {"format": "PDF", "pages": count, "page_reports": reports, "failed_pages": failed,
+                "visual_content_analyzed": False, "content_coverage": "PARTIAL" if failed else "TEXT_AND_OCR_ONLY"}
+        error = "Unreadable PDF pages: " + ", ".join(map(str, failed)) if failed else None
+        return self._result(source_id, elements, info, count, error)
 
-                scan_content = sidecar_ocr if sidecar_ocr else (text if text else f"Сканированная страница {page_num}")
-                elem_type = "ocr" if sidecar_ocr else "scanned_page"
-                elements.append(ExtractedElement(
-                    element_type=elem_type,
-                    content=scan_content,
-                    page_number=page_num,
-                    heading_path=current_heading or f"Страница {page_num}",
-                    metadata={"is_scan": True, "scan_image": str(scan_img_path), "has_ocr": bool(sidecar_ocr), "ocr_engine": "rapidocr" if sidecar_ocr else None}
-                ))
-                raw_parts.append(scan_content)
-                continue
-
-            # Process text blocks
-            blocks = page.get_text("blocks")
-            for b in blocks:
-                block_text = b[4].strip().replace("\xa0", " ").replace("\xad", "")
-                if not block_text:
-                    continue
-
-                # Heading heuristic: single short line, capitalized or prominent
-                lines = block_text.splitlines()
-                if len(lines) == 1 and (len(block_text) < 80 or block_text.isupper()):
-                    current_heading = block_text
-                    elements.append(ExtractedElement(
-                        element_type="heading",
-                        content=block_text,
-                        page_number=page_num,
-                        heading_path=current_heading
-                    ))
-                else:
-                    elements.append(ExtractedElement(
-                        element_type="paragraph",
-                        content=block_text,
-                        page_number=page_num,
-                        heading_path=current_heading
-                    ))
-                raw_parts.append(block_text)
-
-        doc.close()
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            page_count=page_count,
-            media_info={"format": "PDF", "pages": page_count}
-        )
+    @staticmethod
+    def _table_text(rows):
+        rows = [["" if cell is None else str(cell).strip() for cell in row] for row in rows]
+        rows = [row for row in rows if any(cell != "" for cell in row)]
+        if not rows:
+            return ""
+        headers = [cell or f"Колонка {i + 1}" for i, cell in enumerate(rows[0])]
+        lines = ["Заголовки: " + " | ".join(headers)]
+        for index, row in enumerate(rows[1:], 2):
+            fields = [f"{headers[i] if i < len(headers) else f'Колонка {i + 1}'}: {cell}" for i, cell in enumerate(row)]
+            lines.append(f"Строка {index}: " + "; ".join(fields))
+        return "\n".join(lines)
 
     def _extract_docx(self, path: Path, source_id: str) -> ExtractionResult:
-        doc = docx.Document(str(path))
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-        current_heading_path: List[str] = []
-
-        # Iterate body elements (paragraphs and tables)
-        for p in doc.paragraphs:
-            txt = p.text.strip()
-            if not txt:
-                continue
-
-            style_name = p.style.name if p.style else ""
-            if "Heading 1" in style_name:
-                current_heading_path = [txt]
-                elements.append(ExtractedElement(element_type="heading", content=txt, heading_path=txt))
-            elif "Heading 2" in style_name:
-                h_path = " > ".join(current_heading_path[:1] + [txt])
-                current_heading_path = current_heading_path[:1] + [txt]
-                elements.append(ExtractedElement(element_type="heading", content=txt, heading_path=h_path))
-            elif "Heading 3" in style_name:
-                h_path = " > ".join(current_heading_path[:2] + [txt])
-                elements.append(ExtractedElement(element_type="heading", content=txt, heading_path=h_path))
-            elif "List" in style_name:
-                h_path = " > ".join(current_heading_path) if current_heading_path else None
-                elements.append(ExtractedElement(element_type="list_item", content=txt, heading_path=h_path))
-            else:
-                h_path = " > ".join(current_heading_path) if current_heading_path else None
-                elements.append(ExtractedElement(element_type="paragraph", content=txt, heading_path=h_path))
-            raw_parts.append(txt)
-
-        # Extract tables
-        for tbl_idx, tbl in enumerate(doc.tables):
-            headers = [cell.text.strip() for cell in tbl.rows[0].cells] if tbl.rows else []
-            table_rows_text = []
-            for r_idx, row in enumerate(tbl.rows[1:]):
-                vals = [cell.text.strip() for cell in row.cells]
-                # Format row as semantic record
-                row_str = ", ".join([f"{headers[i] if i < len(headers) else f'Col{i}'}: {v}" for i, v in enumerate(vals)])
-                table_rows_text.append(f"Строка {r_idx+1} -> ({row_str})")
-
-            table_content = f"Таблица {tbl_idx+1}:\n" + "\n".join(table_rows_text)
-            elements.append(ExtractedElement(
-                element_type="table",
-                content=table_content,
-                heading_path=" > ".join(current_heading_path) if current_heading_path else None,
-                metadata={"table_index": tbl_idx, "rows": len(tbl.rows), "cols": len(headers)}
-            ))
-            raw_parts.append(table_content)
-
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            media_info={"format": "DOCX", "paragraphs": len(doc.paragraphs), "tables": len(doc.tables)}
-        )
+        import docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
+        document = docx.Document(str(path))
+        elements, headings, tables = [], [], 0
+        # Keep tables interleaved with paragraphs in original body order.
+        for child in document.element.body.iterchildren():
+            if child.tag.endswith("}p"):
+                paragraph = Paragraph(child, document)
+                text = paragraph.text.strip()
+                if not text:
+                    continue
+                style = paragraph.style.name if paragraph.style else ""
+                level = int(style[8:]) if style.startswith("Heading ") and style[8:].isdigit() else None
+                if level and 1 <= level <= 9:
+                    headings = headings[:level - 1] + [text]
+                    kind = "heading"
+                else:
+                    kind = "list_item" if "List" in style else "paragraph"
+                elements.append(ExtractedElement(element_type=kind, content=text,
+                                                 heading_path=" > ".join(headings) or None))
+            elif child.tag.endswith("}tbl"):
+                tables += 1
+                table = Table(child, document)
+                rows = [[cell.text.strip() for cell in row.cells] for row in table.rows]
+                content = self._table_text(rows)
+                if content:
+                    elements.append(ExtractedElement(element_type="table", content=content,
+                                                     heading_path=" > ".join(headings) or None,
+                                                     metadata={"table_index": tables, "rows": len(rows)}))
+        return self._result(source_id, elements, {"format": "DOCX", "tables": tables,
+                           "visual_content_analyzed": False, "content_coverage": "BODY_TEXT_AND_TABLES_ONLY"})
 
     def _extract_pptx(self, path: Path, source_id: str) -> ExtractionResult:
-        prs = pptx.Presentation(str(path))
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-
-        for idx, slide in enumerate(prs.slides):
-            slide_num = idx + 1
-            title = ""
-            if slide.shapes.title and slide.shapes.title.text:
-                title = slide.shapes.title.text.strip()
-
-            slide_texts = []
-            for shape in slide.shapes:
-                if shape.has_text_frame and shape != slide.shapes.title:
-                    for para in shape.text_frame.paragraphs:
-                        t = para.text.strip()
-                        if t:
-                            slide_texts.append(t)
-
-            # Extract speaker notes
-            notes = ""
+        import pptx
+        presentation = pptx.Presentation(str(path))
+        elements, empty_slides = [], []
+        def parts(shapes):
+            for shape in shapes:
+                if getattr(shape, "has_text_frame", False) and shape.text.strip():
+                    yield shape.text.strip()
+                if getattr(shape, "has_table", False):
+                    yield self._table_text([[cell.text for cell in row.cells] for row in shape.table.rows])
+                if hasattr(shape, "shapes"):
+                    yield from parts(shape.shapes)
+        for number, slide in enumerate(presentation.slides, 1):
+            title = slide.shapes.title.text.strip() if slide.shapes.title is not None else ""
+            texts = [part for part in parts(slide.shapes) if part]
             if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
                 notes = slide.notes_slide.notes_text_frame.text.strip()
-
-            slide_body = f"Слайд {slide_num}: {title}\n" + "\n".join(slide_texts)
-            if notes:
-                slide_body += f"\nЗаметки спикера: {notes}"
-
-            elements.append(ExtractedElement(
-                element_type="slide",
-                content=slide_body,
-                slide_number=slide_num,
-                heading_path=title or f"Слайд {slide_num}",
-                metadata={"title": title, "has_notes": bool(notes)}
-            ))
-            if notes:
-                elements.append(ExtractedElement(
-                    element_type="speaker_notes",
-                    content=notes,
-                    slide_number=slide_num,
-                    heading_path=f"{title or f'Слайд {slide_num}'} > Заметки",
-                    metadata={"title": title, "is_notes": True}
-                ))
-            raw_parts.append(slide_body)
-
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            page_count=len(prs.slides),
-            media_info={"format": "PPTX", "slides": len(prs.slides)}
-        )
+                if notes:
+                    texts.append("Заметки спикера:\n" + notes)
+            if not texts:
+                empty_slides.append(number)
+                continue
+            elements.append(ExtractedElement(element_type="slide", content="\n".join(texts),
+                                             slide_number=number, heading_path=title or f"Слайд {number}",
+                                             metadata={"visual_content_analyzed": False}))
+        return self._result(source_id, elements, {"format": "PPTX", "slides": len(presentation.slides),
+                           "slides_without_text": empty_slides, "visual_content_analyzed": False,
+                           "content_coverage": "TEXT_TABLES_AND_NOTES_ONLY"}, len(presentation.slides))
 
     def _extract_xlsx(self, path: Path, source_id: str) -> ExtractionResult:
-        wb = openpyxl.load_workbook(str(path), data_only=True)
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-
-        for sheet_name in wb.sheetnames:
-            sheet = wb[sheet_name]
-            rows = list(sheet.iter_rows(values_only=True))
-            if not rows:
-                continue
-
-            # First non-empty row as header
-            header_row_idx = 0
-            while header_row_idx < len(rows) and not any(rows[header_row_idx]):
-                header_row_idx += 1
-
-            if header_row_idx >= len(rows):
-                continue
-
-            headers = [str(cell).strip() if cell is not None else f"Колонка {i+1}" for i, cell in enumerate(rows[header_row_idx])]
-            
-            sheet_rows_text = []
-            for r_idx, row in enumerate(rows[header_row_idx+1:]):
-                if not any(row):
-                    continue
-                row_items = []
-                for c_idx, cell in enumerate(row):
-                    val_str = str(cell).strip() if cell is not None else ""
-                    if val_str:
-                        h_name = headers[c_idx] if c_idx < len(headers) else f"Колонка {c_idx+1}"
-                        row_items.append(f"{h_name}: {val_str}")
-                if row_items:
-                    sheet_rows_text.append(f"Запись {r_idx+1}: " + ", ".join(row_items))
-
-            sheet_content = f"Таблица: Лист '{sheet_name}' ({len(sheet_rows_text)} строк):\n" + "\n".join(sheet_rows_text)
-            elements.append(ExtractedElement(
-                element_type="table",
-                content=sheet_content,
-                sheet_name=sheet_name,
-                heading_path=f"Прайс-лист > {sheet_name}",
-                metadata={"sheet_name": sheet_name, "row_count": len(sheet_rows_text)}
-            ))
-            raw_parts.append(sheet_content)
-
-        wb.close()
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            media_info={"format": "XLSX", "sheets": wb.sheetnames}
-        )
+        import openpyxl
+        workbook = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
+        elements, sheets = [], list(workbook.sheetnames)
+        try:
+            for sheet in workbook.worksheets:
+                header = None
+                for number, row in enumerate(sheet.iter_rows(values_only=True), 1):
+                    values = ["" if v is None else str(v).strip() for v in row]
+                    if not any(v != "" for v in values):
+                        continue
+                    if header is None:
+                        header = [v or f"Колонка {i + 1}" for i, v in enumerate(values)]
+                        content = "Заголовки: " + " | ".join(header)
+                    else:
+                        fields = [f"{header[i] if i < len(header) else f'Колонка {i + 1}'}: {v}"
+                                  for i, v in enumerate(values) if v != ""]
+                        content = f"Лист '{sheet.title}', строка {number}: " + "; ".join(fields)
+                    elements.append(ExtractedElement(element_type="table", content=content,
+                                                     sheet_name=sheet.title, heading_path=sheet.title,
+                                                     metadata={"row_number": number}))
+        finally:
+            workbook.close()
+        return self._result(source_id, elements, {"format": "XLSX", "sheets": sheets,
+                           "formula_values": "CACHED_ONLY", "content_coverage": "CELL_VALUES_ONLY"})
 
     def _extract_html(self, path: Path, source_id: str) -> ExtractionResult:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            html_text = f.read()
-
-        soup = BeautifulSoup(html_text, "html.parser")
-        # Remove noisy tags
+        from bs4 import BeautifulSoup, NavigableString
+        soup = BeautifulSoup(path.read_bytes(), "html.parser")
         for tag in soup(["script", "style", "nav", "header", "footer", "aside", "noscript", "svg"]):
             tag.decompose()
-
-        title = soup.title.string.strip() if soup.title and soup.title.string else path.stem
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-        current_heading = title
-
-        # Iterate body child elements
+        title = soup.title.get_text(" ", strip=True) if soup.title else path.stem
         body = soup.body or soup
-        for elem in body.find_all(["h1", "h2", "h3", "h4", "p", "table", "ul", "ol"]):
-            text = elem.get_text(separator=" ", strip=True)
-            if not text:
-                continue
-
-            if elem.name in ["h1", "h2", "h3", "h4"]:
-                current_heading = text
-                elements.append(ExtractedElement(element_type="heading", content=text, heading_path=current_heading))
-            elif elem.name == "table":
-                elements.append(ExtractedElement(element_type="table", content=text, heading_path=current_heading))
-            else:
-                elements.append(ExtractedElement(element_type="paragraph", content=text, heading_path=current_heading))
-            raw_parts.append(text)
-
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            media_info={"format": "HTML", "title": title}
-        )
+        elements, buffer = [], []
+        heading = title
+        def flush():
+            text = " ".join(buffer).strip()
+            buffer.clear()
+            if text:
+                elements.append(ExtractedElement(element_type="paragraph", content=text, heading_path=heading))
+        def visit(node):
+            nonlocal heading
+            if isinstance(node, NavigableString):
+                if type(node) is NavigableString and str(node).strip():
+                    buffer.append(str(node).strip())
+                return
+            if node.name in {"h1", "h2", "h3", "h4", "h5", "h6"}:
+                flush()
+                heading = node.get_text(" ", strip=True)
+                if heading:
+                    elements.append(ExtractedElement(element_type="heading", content=heading, heading_path=heading))
+                return
+            if node.name == "table":
+                flush()
+                content = self._table_text([[cell.get_text(" ", strip=True)
+                                            for cell in row.find_all(["td", "th"], recursive=False)]
+                                           for row in node.find_all("tr")])
+                if content:
+                    elements.append(ExtractedElement(element_type="table", content=content, heading_path=heading))
+                return
+            boundary = node.name in {"div", "section", "article", "p", "li", "ul", "ol", "br", "pre"}
+            if boundary:
+                flush()
+            for child in node.children:
+                visit(child)
+            if boundary:
+                flush()
+        visit(body)
+        flush()
+        return self._result(source_id, elements, {"format": "HTML", "title": title,
+                           "encoding": soup.original_encoding, "content_coverage": "VISIBLE_TEXT_ONLY",
+                           "conversation_structure_preserved": False})
 
     def _extract_text_md(self, path: Path, source_id: str) -> ExtractionResult:
-        with open(path, "r", encoding="utf-8", errors="replace") as f:
-            text = f.read()
-
-        lines = text.splitlines()
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-        current_heading = ""
-        current_buffer = []
-
-        for line in lines:
-            line_str = line.strip()
-            if not line_str:
-                if current_buffer:
-                    para = " ".join(current_buffer)
-                    elements.append(ExtractedElement(element_type="paragraph", content=para, heading_path=current_heading or None))
-                    raw_parts.append(para)
-                    current_buffer = []
-                continue
-
-            # Detect markdown heading
-            if line_str.startswith("#"):
-                if current_buffer:
-                    para = " ".join(current_buffer)
-                    elements.append(ExtractedElement(element_type="paragraph", content=para, heading_path=current_heading or None))
-                    raw_parts.append(para)
-                    current_buffer = []
-                current_heading = line_str.lstrip("#").strip()
-                elements.append(ExtractedElement(element_type="heading", content=current_heading, heading_path=current_heading))
-                raw_parts.append(current_heading)
+        text = path.read_text(encoding="utf-8-sig")
+        elements, buffer, headings = [], [], []
+        def flush():
+            if buffer:
+                elements.append(ExtractedElement(element_type="paragraph", content="\n".join(buffer),
+                                                 heading_path=" > ".join(headings) or None))
+                buffer.clear()
+        for line in text.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                flush()
+            elif path.suffix.lower() == ".md" and stripped.startswith("#") and " " in stripped:
+                prefix, heading = stripped.split(" ", 1)
+                if 1 <= len(prefix) <= 6 and set(prefix) == {"#"} and heading.strip():
+                    flush()
+                    headings = headings[:len(prefix) - 1] + [heading.strip()]
+                    elements.append(ExtractedElement(element_type="heading", content=heading.strip(),
+                                                     heading_path=" > ".join(headings)))
+                else:
+                    buffer.append(line)
             else:
-                current_buffer.append(line_str)
-
-        if current_buffer:
-            para = " ".join(current_buffer)
-            elements.append(ExtractedElement(element_type="paragraph", content=para, heading_path=current_heading or None))
-            raw_parts.append(para)
-
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            media_info={"format": path.suffix.upper().lstrip(".")}
-        )
+                buffer.append(line)
+        flush()
+        return self._result(source_id, elements, {"format": path.suffix.lstrip(".").upper(),
+                           "encoding": "utf-8", "content_coverage": "TEXT_ONLY"})
