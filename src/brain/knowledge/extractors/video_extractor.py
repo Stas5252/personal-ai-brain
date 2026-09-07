@@ -1,357 +1,215 @@
+"""Honest video ingestion with timestamped speech and optional frame analysis.
+
+A video filename is not visual knowledge. This extractor indexes only real
+transcript segments or results from an explicitly supplied frame analyzer.
+Metadata failures are errors, never a fabricated 60-second 1080p video.
 """
-Video Extractor for MP4, MOV, MKV, and WEBM.
-Combines FFmpeg metadata, scene detection, keyframe sampling, Whisper audio transcript,
-and semantic visual-audio fusion into timestamped knowledge elements.
-"""
-import os
 import json
+import re
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Callable
 
 from src.brain.config import (
-    VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_MAX_FRAMES_PER_MINUTE, VIDEO_SCENE_DETECTION_THRESHOLD
+    VIDEO_FRAME_INTERVAL_SECONDS, VIDEO_MAX_FRAMES_PER_MINUTE,
+    VIDEO_SCENE_DETECTION_THRESHOLD,
 )
 from src.brain.knowledge.extractors.base import BaseExtractor
 from src.brain.knowledge.extractors.audio_extractor import AudioExtractor
-from src.brain.models.file_metadata import (
-    ExtractionResult, ExtractedElement, VideoMetadata, SceneInfo, AudioSegment
-)
+from src.brain.models.file_metadata import ExtractionResult, ExtractedElement, VideoMetadata, SceneInfo
+
 
 class SceneDetector:
-    """Abstraction for video scene change detection."""
     def __init__(self, threshold: float = VIDEO_SCENE_DETECTION_THRESHOLD):
+        if not 0 <= threshold <= 1:
+            raise ValueError("scene threshold must be between 0 and 1")
         self.threshold = threshold
 
     def detect_scenes(self, video_path: Path, duration: float) -> List[SceneInfo]:
-        """Detects scene boundaries using ffmpeg or fallback interval."""
-        scenes: List[SceneInfo] = []
+        if duration <= 0:
+            return []
         try:
-            cmd = [
-                "ffmpeg", "-i", str(video_path),
-                "-filter:v", f"select='gt(scene,{self.threshold})',showinfo",
-                "-f", "null", "-"
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            import re
-            pts_times = [float(m) for m in re.findall(r"pts_time:([0-9.]+)", res.stderr)]
-            pts_times = sorted(list(set([0.0] + pts_times + [duration])))
-            for i in range(len(pts_times) - 1):
-                scenes.append(SceneInfo(
-                    scene_index=i + 1,
-                    start_time=pts_times[i],
-                    end_time=pts_times[i+1],
-                    keyframe_path=None
-                ))
-        except Exception:
-            pass
+            result = subprocess.run(
+                ["ffmpeg", "-hide_banner", "-i", str(video_path), "-filter:v",
+                 f"select='gt(scene,{self.threshold})',showinfo", "-f", "null", "-"],
+                capture_output=True, text=True, timeout=60, check=False)
+            points = [0.0] + [float(x) for x in re.findall(r"pts_time:([0-9.]+)", result.stderr)] + [duration]
+            points = sorted({max(0.0, min(duration, x)) for x in points})
+            return [SceneInfo(scene_index=i + 1, start_time=a, end_time=b)
+                    for i, (a, b) in enumerate(zip(points, points[1:])) if b > a]
+        except (OSError, subprocess.SubprocessError, ValueError):
+            return [SceneInfo(scene_index=1, start_time=0.0, end_time=duration)]
 
-        if not scenes:
-            scenes.append(SceneInfo(scene_index=1, start_time=0.0, end_time=duration, keyframe_path=None))
-        return scenes
 
 class VideoExtractor(BaseExtractor):
     SUPPORTED_EXTS = {".mp4", ".mov", ".mkv", ".webm"}
 
-    def __init__(
-        self,
-        frame_interval_seconds: float = VIDEO_FRAME_INTERVAL_SECONDS,
-        scene_threshold: float = VIDEO_SCENE_DETECTION_THRESHOLD,
-        audio_extractor: Optional[AudioExtractor] = None,
-        scene_detector: Optional[SceneDetector] = None
-    ):
+    def __init__(self, frame_interval_seconds: float = VIDEO_FRAME_INTERVAL_SECONDS,
+                 scene_threshold: float = VIDEO_SCENE_DETECTION_THRESHOLD,
+                 audio_extractor: Optional[AudioExtractor] = None,
+                 scene_detector: Optional[SceneDetector] = None,
+                 frame_analyzer: Optional[Callable[[Path], Any]] = None,
+                 max_duration_seconds: float = 12 * 60 * 60):
+        if frame_interval_seconds <= 0 or max_duration_seconds <= 0:
+            raise ValueError("video limits must be positive")
         self.frame_interval_seconds = frame_interval_seconds
-        self.scene_threshold = scene_threshold
+        self.max_duration_seconds = max_duration_seconds
         self.audio_extractor = audio_extractor or AudioExtractor()
-        self.scene_detector = scene_detector or SceneDetector(threshold=scene_threshold)
-
-    def cleanup_temp_artifacts(self, derived_dir: Path, keep_keyframes: bool = True):
-        """Cleans up intermediate uncompressed audio or scratch files."""
-        try:
-            audio_wav = derived_dir / "extracted_audio.wav"
-            if audio_wav.exists():
-                audio_wav.unlink(missing_ok=True)
-            if not keep_keyframes:
-                keyframes_dir = derived_dir / "keyframes"
-                if keyframes_dir.exists():
-                    import shutil
-                    shutil.rmtree(keyframes_dir, ignore_errors=True)
-        except Exception:
-            pass
+        self.scene_detector = scene_detector or SceneDetector(scene_threshold)
+        self.frame_analyzer = frame_analyzer
 
     def can_handle(self, extension: str, mime_type: str) -> bool:
         return extension.lower() in self.SUPPORTED_EXTS
 
     def get_video_metadata(self, video_path: Path) -> VideoMetadata:
-        """Extracts technical container and stream metadata via ffprobe."""
         try:
-            cmd = [
-                "ffprobe", "-v", "quiet", "-print_format", "json",
-                "-show_format", "-show_streams", str(video_path)
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-            if res.returncode == 0:
-                data = json.loads(res.stdout)
-                streams = data.get("streams", [])
-                fmt = data.get("format", {})
-                
-                v_stream = next((s for s in streams if s.get("codec_type") == "video"), {})
-                a_stream = next((s for s in streams if s.get("codec_type") == "audio"), {})
-                
-                duration = float(fmt.get("duration", v_stream.get("duration", 0.0)))
-                w = int(v_stream.get("width", 0))
-                h = int(v_stream.get("height", 0))
-                
-                # Parse FPS
-                r_frame_rate = v_stream.get("r_frame_rate", "30/1")
-                try:
-                    num, den = map(int, r_frame_rate.split("/"))
-                    fps = round(num / den, 2) if den else 30.0
-                except Exception:
-                    fps = 30.0
-
-                return VideoMetadata(
-                    duration_seconds=duration,
-                    fps=fps,
-                    width=w,
-                    height=h,
-                    codec=v_stream.get("codec_name", "unknown"),
-                    audio_codec=a_stream.get("codec_name"),
-                    has_audio=bool(a_stream),
-                    bitrate=int(fmt.get("bit_rate", 0)) if fmt.get("bit_rate") else None
-                )
-        except Exception:
-            pass
-
-        return VideoMetadata(duration_seconds=60.0, fps=30.0, width=1920, height=1080, codec="h264", has_audio=True)
+            result = subprocess.run(
+                ["ffprobe", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", str(video_path)],
+                capture_output=True, text=True, timeout=60, check=False)
+            if result.returncode != 0:
+                raise ValueError(result.stderr.strip()[:300] or "ffprobe failed")
+            data = json.loads(result.stdout)
+            streams = data.get("streams", [])
+            video = next((s for s in streams if s.get("codec_type") == "video"), None)
+            if not video:
+                raise ValueError("video stream not found")
+            fmt = data.get("format", {})
+            duration = float(fmt.get("duration") or video.get("duration") or 0)
+            if not 0 < duration <= self.max_duration_seconds:
+                raise ValueError("video duration is missing or exceeds configured limit")
+            rate = video.get("r_frame_rate", "0/1").split("/")
+            fps = float(rate[0]) / float(rate[1]) if len(rate) == 2 and float(rate[1]) else 0.0
+            if not video.get("width") or not video.get("height"):
+                raise ValueError("video dimensions are missing")
+            audio = next((s for s in streams if s.get("codec_type") == "audio"), None)
+            bitrate = fmt.get("bit_rate")
+            return VideoMetadata(duration_seconds=duration, fps=fps,
+                                 width=int(video["width"]), height=int(video["height"]),
+                                 codec=video.get("codec_name", "unknown"),
+                                 audio_codec=audio.get("codec_name") if audio else None,
+                                 has_audio=audio is not None,
+                                 bitrate=int(bitrate) if bitrate else None)
+        except (OSError, subprocess.SubprocessError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
+            raise RuntimeError("Video metadata unavailable: " + str(exc)) from exc
 
     def extract_audio_track(self, video_path: Path, output_wav: Path) -> bool:
-        """Extracts 16kHz mono audio from video container."""
         try:
-            cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le",
-                str(output_wav)
-            ]
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            return res.returncode == 0 and output_wav.exists() and output_wav.stat().st_size > 0
-        except Exception:
+            result = subprocess.run(
+                ["ffmpeg", "-y", "-hide_banner", "-i", str(video_path), "-vn", "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(output_wav)],
+                capture_output=True, text=True, timeout=300, check=False)
+            return result.returncode == 0 and output_wav.is_file() and output_wav.stat().st_size > 0
+        except (OSError, subprocess.SubprocessError):
             return False
 
     def sample_keyframes(self, video_path: Path, keyframes_dir: Path, duration: float) -> List[Tuple[float, Path]]:
-        """Samples representative keyframes using fixed interval and scene heuristics."""
         keyframes_dir.mkdir(parents=True, exist_ok=True)
-        sampled: List[Tuple[float, Path]] = []
-
-        # If video is very short (< 30s), extract at least 1-3 frames
-        interval = max(3.0, self.frame_interval_seconds)
-        if duration > 0 and (duration / interval) > (VIDEO_MAX_FRAMES_PER_MINUTE * (duration / 60.0)):
-            interval = max(5.0, duration / 10.0)
-
-        pattern = str(keyframes_dir / "frame_%04d.jpg")
-        try:
-            # Extract frames at interval
-            cmd = [
-                "ffmpeg", "-y", "-i", str(video_path),
-                "-vf", f"fps=1/{interval}",
-                "-q:v", "2", pattern
-            ]
-            subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-            
-            # Map extracted frames to timestamps
-            frame_files = sorted(list(keyframes_dir.glob("frame_*.jpg")))
-            for idx, f in enumerate(frame_files):
-                timestamp = round(idx * interval, 2)
-                if timestamp <= duration:
-                    sampled.append((timestamp, f))
-        except Exception:
-            pass
-
+        interval = max(1.0, self.frame_interval_seconds)
+        max_frames = max(1, int((duration / 60.0) * VIDEO_MAX_FRAMES_PER_MINUTE))
+        count = min(max_frames, max(1, int(duration / interval) + 1))
+        if count == 1:
+            timestamps = [0.0]
+        else:
+            timestamps = [round(i * duration / (count - 1), 3) for i in range(count)]
+        sampled = []
+        for index, timestamp in enumerate(timestamps):
+            output = keyframes_dir / f"frame_{index:04d}.jpg"
+            try:
+                result = subprocess.run(
+                    ["ffmpeg", "-y", "-hide_banner", "-ss", str(timestamp), "-i", str(video_path),
+                     "-frames:v", "1", "-q:v", "2", str(output)],
+                    capture_output=True, text=True, timeout=90, check=False)
+                if result.returncode == 0 and output.is_file() and output.stat().st_size > 0:
+                    sampled.append((timestamp, output))
+            except (OSError, subprocess.SubprocessError):
+                continue
         return sampled
 
+    def _format_time(self, seconds: float) -> str:
+        minutes, remainder = divmod(max(0.0, seconds), 60)
+        return f"{int(minutes):02d}:{int(remainder):02d}"
+
+    def _analyze_frame(self, path: Path) -> Optional[Dict[str, Any]]:
+        if self.frame_analyzer is None:
+            return None
+        try:
+            result = self.frame_analyzer(path)
+            if isinstance(result, str) and result.strip():
+                return {"description": result.strip(), "provenance": "frame_analyzer"}
+            if isinstance(result, dict) and isinstance(result.get("description"), str) and result["description"].strip():
+                return {"description": result["description"].strip(), "provenance": "frame_analyzer",
+                        "ocr_text": result.get("ocr_text", "")}
+        except Exception:
+            return None
+        return None
+
     def extract(self, file_path: Path, source_id: str, derived_dir: Path) -> ExtractionResult:
-        p = Path(file_path)
-        meta = self.get_video_metadata(p)
-        
-        # 1. Check sidecar video manifest (ideal for exact pilot benchmarks / tests)
-        sidecar_candidates = [
-            p.with_suffix(p.suffix + ".manifest.json"),
-            p.parent / f"{p.stem}.manifest.json",
-            p.parent / f"{p.stem}.video_meta.json",
-            p.parent / f"{p.name}.video_meta.json"
-        ]
-        if "_" in p.stem:
-            clean_stem = p.stem.split("_", 1)[-1]
-            sidecar_candidates.extend([
-                p.parent / f"{clean_stem}.manifest.json",
-                p.parent / f"{clean_stem}.video_meta.json",
-                p.parent / f"{clean_stem}.json",
-                Path("tests/pilot_corpus") / f"{clean_stem}.manifest.json",
-                Path("tests/pilot_corpus") / f"{clean_stem}.video_meta.json",
-                Path("tests/pilot_corpus") / "sample_lesson_ru.manifest.json",
-                Path("tests/pilot_corpus") / "sample_lesson_ru.video_meta.json"
-            ])
-
-        for sc in sidecar_candidates:
-            if sc.exists():
-                return self._load_sidecar_manifest(sc, source_id, meta)
-
-        # 2. Extract audio and transcribe
-        audio_wav = derived_dir / "extracted_audio.wav"
-        has_extracted_audio = self.extract_audio_track(p, audio_wav)
-        
-        audio_result = None
-        if has_extracted_audio:
-            audio_result = self.audio_extractor.extract(audio_wav, source_id, derived_dir)
-
-        # 3. Sample keyframes
-        keyframes_dir = derived_dir / "keyframes"
-        sampled_frames = self.sample_keyframes(p, keyframes_dir, meta.duration_seconds)
-
-        # 4. Semantic Fusion: align visual keyframes with transcript segments
-        elements: List[ExtractedElement] = []
-        raw_parts: List[str] = []
-
-        if audio_result and audio_result.elements:
-            for elem in audio_result.elements:
-                start_t = elem.start_time or 0.0
-                end_t = elem.end_time or (start_t + 10.0)
-
-                # Find nearest keyframe within time window
-                closest_frame = None
-                for ts, f_path in sampled_frames:
-                    if start_t <= ts <= end_t or abs(ts - start_t) < 5.0:
-                        closest_frame = f_path
-                        break
-
-                m_start = int(start_t // 60)
-                s_start = int(start_t % 60)
-                m_end = int(end_t // 60)
-                s_end = int(end_t % 60)
-                ts_range = f"{m_start:02d}:{s_start:02d} – {m_end:02d}:{s_end:02d}"
-
-                content = f"Видео [{ts_range}] Речь: {elem.content}"
-                if closest_frame:
-                    content += f" (Кадр: {closest_frame.name})"
-
-                elements.append(ExtractedElement(
-                    element_type="fusion",
-                    content=content,
-                    start_time=start_t,
-                    end_time=end_t,
-                    heading_path=ts_range,
-                    metadata={
-                        "timestamp_range": ts_range,
-                        "frame_path": str(closest_frame) if closest_frame else None,
-                        "has_speech": True
-                    }
-                ))
-                raw_parts.append(content)
-        else:
-            # Visual-only video elements
-            for ts, f_path in sampled_frames:
-                m = int(ts // 60)
-                s = int(ts % 60)
-                ts_label = f"{m:02d}:{s:02d}"
-                content = f"Видео [{ts_label}] Визуальный ключевой кадр: {f_path.name}"
-                elements.append(ExtractedElement(
-                    element_type="frame",
-                    content=content,
-                    start_time=ts,
-                    end_time=ts + self.frame_interval_seconds,
-                    heading_path=ts_label,
-                    metadata={"timestamp_range": ts_label, "frame_path": str(f_path)}
-                ))
-                raw_parts.append(content)
-
-        # Cleanup intermediate uncompressed audio to conserve disk space
-        self.cleanup_temp_artifacts(derived_dir, keep_keyframes=True)
-
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n".join(raw_parts),
-            duration_seconds=meta.duration_seconds,
-            media_info={
-                "format": p.suffix.upper().lstrip("."),
-                "duration_seconds": meta.duration_seconds,
-                "fps": meta.fps,
-                "resolution": f"{meta.width}x{meta.height}",
-                "keyframes_count": len(sampled_frames),
-                "has_audio": meta.has_audio
-            }
-        )
-
-    def _load_sidecar_manifest(self, manifest_path: Path, source_id: str, meta: VideoMetadata) -> ExtractionResult:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        elements = []
-        raw_parts = []
-        raw_items = data.get("segments") or data.get("scenes") or []
-        audio_segments = data.get("audio_transcript", {}).get("segments", [])
-
-        for item in raw_items:
-            start_t = float(item.get("start_time", item.get("start", 0.0)))
-            end_t = float(item.get("end_time", item.get("end", 0.0)))
-            topic = item.get("topic", "")
-            transcript = item.get("transcript", "") or item.get("text", "")
-            visual_desc = item.get("visual_description", "") or item.get("description", "")
-            ocr_text = item.get("ocr_text", "")
-
-            # If transcript is empty, match audio segment by timestamp
-            if not transcript and audio_segments:
-                for a_seg in audio_segments:
-                    a_start = float(a_seg.get("start", 0.0))
-                    a_end = float(a_seg.get("end", 0.0))
-                    if abs(a_start - start_t) <= 1.0 or (a_start <= start_t <= a_end):
-                        transcript = a_seg.get("text", "")
-                        break
-
-            m_start = int(start_t // 60)
-            s_start = int(start_t % 60)
-            m_end = int(end_t // 60)
-            s_end = int(end_t % 60)
-            ts_range = f"{m_start:02d}:{s_start:02d} – {m_end:02d}:{s_end:02d}"
-
-            content_lines = [f"Видео [{ts_range}]"]
-            if topic:
-                content_lines.append(f"Тема: {topic}")
-            if transcript:
-                content_lines.append(f"Речь спикера: {transcript}")
-            if ocr_text:
-                content_lines.append(f"Текст на слайде (OCR): {ocr_text}")
-            if visual_desc:
-                content_lines.append(f"Визуал: {visual_desc}")
-
-            fused_text = "\n".join(content_lines)
-            elements.append(ExtractedElement(
-                element_type="fusion",
-                content=fused_text,
-                start_time=start_t,
-                end_time=end_t,
-                heading_path=ts_range,
-                metadata={
-                    "topic": topic,
-                    "timestamp_range": ts_range,
-                    "ocr_text": ocr_text,
-                    "visual_description": visual_desc
-                }
-            ))
-            raw_parts.append(fused_text)
-
-        dur = float(data.get("duration", meta.duration_seconds))
-        return ExtractionResult(
-            source_id=source_id,
-            success=True,
-            elements=elements,
-            raw_text="\n\n".join(raw_parts),
-            duration_seconds=dur,
-            media_info={
-                "format": manifest_path.suffix.upper().lstrip("."),
-                "duration_seconds": dur,
-                "segments_count": len(elements),
-                "is_manifest": True
-            }
-        )
+        path = Path(file_path)
+        info = {"format": path.suffix.lstrip(".").upper(), "content_coverage": "NONE",
+                "warnings": [], "sidecar_used": False}
+        audio_wav = Path(derived_dir) / "extracted_audio.wav"
+        keyframes_dir = Path(derived_dir) / "keyframes"
+        try:
+            if not path.is_file() or not self.can_handle(path.suffix, ""):
+                raise ValueError("video file does not exist or extension is unsupported")
+            meta = self.get_video_metadata(path)
+            info.update(duration_seconds=meta.duration_seconds, fps=meta.fps,
+                        resolution=f"{meta.width}x{meta.height}", has_audio=meta.has_audio)
+            samples = self.sample_keyframes(path, keyframes_dir, meta.duration_seconds)
+            audio_result = None
+            if meta.has_audio and self.extract_audio_track(path, audio_wav):
+                audio_result = self.audio_extractor.extract(audio_wav, source_id, Path(derived_dir))
+            elif meta.has_audio:
+                info["warnings"].append("Audio extraction failed")
+            elements: List[ExtractedElement] = []
+            analyzed_frames: Dict[float, Dict[str, Any]] = {}
+            for timestamp, frame in samples:
+                analysis = self._analyze_frame(frame)
+                if analysis:
+                    analyzed_frames[timestamp] = analysis
+            if audio_result and audio_result.success and audio_result.elements:
+                for segment in audio_result.elements:
+                    start = float(segment.start_time or 0.0)
+                    end = float(segment.end_time or start)
+                    nearest = min(samples, key=lambda item: abs(item[0] - start), default=None)
+                    content = f"Видео [{self._format_time(start)} - {self._format_time(end)}] Речь: {segment.content.strip()}"
+                    metadata = {"timestamp_range": f"{self._format_time(start)} - {self._format_time(end)}",
+                                "has_speech": True, "provenance": "transcript"}
+                    if nearest and nearest[0] in analyzed_frames:
+                        analysis = analyzed_frames[nearest[0]]
+                        content += "\nВизуальный анализ кадра (интерпретация): " + analysis["description"]
+                        if analysis.get("ocr_text"):
+                            content += "\nOCR кадра: " + str(analysis["ocr_text"])
+                        metadata["frame_timestamp"] = nearest[0]
+                    elements.append(ExtractedElement(element_type="fusion", content=content,
+                                                     start_time=start, end_time=end,
+                                                     heading_path=metadata["timestamp_range"], metadata=metadata))
+            else:
+                for timestamp, analysis in analyzed_frames.items():
+                    end = min(meta.duration_seconds, timestamp + self.frame_interval_seconds)
+                    elements.append(ExtractedElement(
+                        element_type="fusion", content=f"Видео [{self._format_time(timestamp)} - {self._format_time(end)}] Визуальный анализ (интерпретация): {analysis['description']}",
+                        start_time=timestamp, end_time=end,
+                        heading_path=self._format_time(timestamp),
+                        metadata={"timestamp_range": f"{self._format_time(timestamp)} - {self._format_time(end)}",
+                                  "provenance": "frame_analyzer", "frame_timestamp": timestamp,
+                                  "ocr_text": analysis.get("ocr_text", "")}))
+            info.update(keyframes_count=len(samples), analyzed_frames=len(analyzed_frames),
+                        transcript_segments=len(audio_result.elements) if audio_result and audio_result.elements else 0)
+            if not elements:
+                info["warnings"].append("No transcript or frame analysis was available")
+                return ExtractionResult(source_id=source_id, success=False, elements=[], raw_text="",
+                                        duration_seconds=meta.duration_seconds, media_info=info,
+                                        error_message="Video has no usable transcript or visual analysis")
+            info["content_coverage"] = "TRANSCRIPT_AND_FRAMES" if analyzed_frames and audio_result and audio_result.elements else ("TRANSCRIPT" if audio_result and audio_result.elements else "FRAMES")
+            return ExtractionResult(source_id=source_id, success=True, elements=elements,
+                                    raw_text="\n\n".join(e.content for e in elements),
+                                    duration_seconds=meta.duration_seconds, media_info=info)
+        except Exception as exc:
+            return ExtractionResult(source_id=source_id, success=False, media_info=info,
+                                    error_message="Video extraction failed: " + str(exc))
+        finally:
+            try:
+                if audio_wav.exists():
+                    audio_wav.unlink()
+            except OSError:
+                pass
