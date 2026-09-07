@@ -26,7 +26,6 @@ class VideoHonestyTests(unittest.TestCase):
 
     def test_filename_is_not_indexed_as_visual_knowledge(self):
         source = inspect.getsource(VideoExtractor)
-        self.assertNotIn("frame_path":, source) if False else None
         self.assertNotIn("Кадр: {closest_frame.name}", source)
 
 
