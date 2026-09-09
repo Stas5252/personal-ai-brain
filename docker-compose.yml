@@ -1,6 +1,58 @@
 name: personal-ai
 
 services:
+
+  # ─── Brain API (FastAPI + Gemini) ──────────────────────────────────────────────
+  brain_api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brain-api
+    restart: unless-stopped
+    ports:
+      - "${BRAIN_API_PORT:-8000}:8000"
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BRAIN_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
+      - BRAIN_DEFAULT_MODEL=${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
+      - UPSTREAM_LLM_BASE_URL=${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-${BRAIN_API_KEY}}
+      - EMBEDDING_PROVIDER_TYPE=${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
+      - MAX_FILE_SIZE_BYTES=${MAX_FILE_SIZE_BYTES:-20971520}
+      - BRAIN_DATA_DIR=/app/data
+    volumes:
+      - brain-data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ─── Telegram Runner ──────────────────────────────────────────────────────────────
+  telegram:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: brain-telegram
+    restart: unless-stopped
+    command: ["python", "-m", "src.brain.channels.telegram_runner"]
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+      - BRAIN_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
+      - BRAIN_DEFAULT_MODEL=${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
+      - UPSTREAM_LLM_BASE_URL=${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_OWNER_ID=${TELEGRAM_OWNER_ID:-}
+      - MAX_FILE_SIZE_BYTES=${MAX_FILE_SIZE_BYTES:-20971520}
+      - BRAIN_DATA_DIR=/app/data
+    volumes:
+      - brain-data:/app/data
+    depends_on:
+      brain_api:
+        condition: service_healthy
+
+  # ─── Open WebUI (чат-интерфейс) ───────────────────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:0.11.3
     container_name: open-webui
@@ -13,15 +65,18 @@ services:
       - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
       - WEBUI_NAME=${WEBUI_NAME:-Personal AI Studio}
       - DEFAULT_MODELS=${DEFAULT_MODELS:-personal-ai-brain}
-      - OPENAI_API_BASE_URL=${OPENAI_API_BASE_URL:-http://host.docker.internal:8000/v1}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-brain-secure-stage5-federation-key-2026}
+      - OPENAI_API_BASE_URL=http://brain-api:8000/v1
+      - OPENAI_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
       - CHAT_COMPLETION_TIMEOUT=120
       - ENABLE_RAG_WEB_SEARCH=false
     volumes:
       - open-webui-data:/app/backend/data
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      brain_api:
+        condition: service_healthy
 
 volumes:
+  brain-data:
+    name: brain-data
   open-webui-data:
     name: open-webui-data
