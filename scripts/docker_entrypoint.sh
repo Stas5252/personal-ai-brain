@@ -1,21 +1,23 @@
 #!/bin/bash
-# Personal AI Brain — Docker Entrypoint
-# Автоматически индексирует KB-файлы при первом запуске.
-set -e
+set -Eeuo pipefail
 
-echo "🧠 Personal AI Brain — Starting..."
+SERVICE="${BRAIN_SERVICE:-api}"
+echo "🧠 Personal AI Brain — starting ${SERVICE}..."
 
-# Индексация KB только один раз (маркер-файл)
-SEED_MARKER="/app/data/.kb_seeded_v1"
-
-if [ ! -f "$SEED_MARKER" ]; then
-    echo "📚 Индексирую базу знаний..."
-    python import_knowledge.py /app/src/brain/knowledge/ --skip-videos 2>&1 | tail -30 || true
-    touch "$SEED_MARKER"
-    echo "✅ База знаний проиндексирована!"
-else
-    echo "⏭️  База знаний уже актуальна, пропускаю."
+if [ "${BRAIN_STRICT_STARTUP:-true}" = "true" ]; then
+    python /app/scripts/validate_environment.py "$SERVICE"
 fi
 
-# Запускаем переданную команду (uvicorn или telegram_runner)
+SEED_MARKER="/app/data/.kb_seeded_v2"
+if [ "$SERVICE" = "api" ] && [ ! -f "$SEED_MARKER" ]; then
+    echo "📚 Indexing bundled knowledge base..."
+    if python import_knowledge.py /app/src/brain/knowledge/ --skip-videos; then
+        touch "$SEED_MARKER"
+        echo "✅ Knowledge base indexed."
+    else
+        echo "❌ Knowledge indexing failed; refusing partial startup." >&2
+        exit 1
+    fi
+fi
+
 exec "$@"
