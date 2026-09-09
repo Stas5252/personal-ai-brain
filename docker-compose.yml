@@ -30,11 +30,7 @@ services:
     ports:
       - "${BRAIN_BIND_ADDRESS:-127.0.0.1}:${BRAIN_API_PORT:-8000}:8000"
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import os,urllib.request; r=urllib.request.Request('http://localhost:8000/health/ready',headers=dict(Authorization='Bearer '+os.environ['BRAIN_API_KEY'])); urllib.request.urlopen(r,timeout=5)"
+      test: [CMD, python, -c, "import os,urllib.request; r=urllib.request.Request('http://localhost:8000/health/ready',headers=dict(Authorization='Bearer '+os.environ['BRAIN_API_KEY'])); urllib.request.urlopen(r,timeout=5)"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -43,7 +39,7 @@ services:
   telegram:
     <<: *brain-common
     container_name: brain-telegram
-    command: ["python", "-m", "src.brain.channels.telegram_runner"]
+    command: ["python", "-m", "src.brain.channels.telegram_guided_runner"]
     environment:
       <<: *brain-environment
       BRAIN_SERVICE: telegram
@@ -70,7 +66,6 @@ services:
       OPENAI_API_BASE_URL: http://brain-api:8000/v1
       OPENAI_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
       CHAT_COMPLETION_TIMEOUT: 120
-      ENABLE_RAG_WEB_SEARCH: "false"
     volumes:
       - open-webui-data:/app/backend/data
     depends_on:
