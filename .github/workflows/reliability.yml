@@ -1,46 +1,62 @@
-name: Reliability regression
+name: Production acceptance
+
 on:
   push:
-    branches: [master, 'fix/**']
+    branches: [master, 'feature/**', 'fix/**']
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: acceptance-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  regression:
+  deterministic-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
-      - run: pip install -r requirements.txt ruff
-      - run: python -m compileall -q src
-      - name: Static checks and deterministic regression suite
-        shell: bash
+      - name: Install
         run: |
-          set +e
-          ruff check src --select F821 --output-format github
-          lint_result=$?
-          python -m pytest "$GITHUB_WORKSPACE/tests/reliability" -v --junitxml="$GITHUB_WORKSPACE/reliability-results.xml" > reliability-log.txt 2>&1
-          result=$?
-          cat reliability-log.txt
-          if [ "$result" -ne 0 ]; then
-            python - <<'PY'
-          import pathlib
-          text = pathlib.Path('reliability-log.txt').read_text()[-18000:]
-          text = text.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
-          print('::error title=Regression diagnostics::' + text)
-          PY
-          fi
-          if [ "$lint_result" -ne 0 ]; then exit "$lint_result"; fi
-          exit "$result"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt ruff
+          pip check
+      - name: Compile and lint correctness
+        run: |
+          python -m compileall -q src scripts tests
+          ruff check src scripts tests --select E9,F63,F7,F82 --output-format github
+      - name: Validate production configuration and Compose
+        env:
+          BRAIN_API_KEY: ci-only-random-brain-api-key-000000000000000000
+          GEMINI_API_KEY: ci-gemini-placeholder
+          TELEGRAM_BOT_TOKEN: 123456789:ci-telegram-placeholder-token
+          TELEGRAM_OWNER_ID: '123456789'
+          WEBUI_SECRET_KEY: ci-only-random-webui-secret-000000000000000000
+        run: |
+          python scripts/validate_environment.py api
+          python scripts/validate_environment.py telegram
+          docker compose config --quiet
+      - name: Deterministic reliability and product acceptance
+        run: |
+          pytest -q \
+            tests/reliability \
+            tests/brain/test_yaishka_deep_capabilities.py \
+            tests/brain/test_photographer_acceptance.py \
+            tests/brain/test_product_scenarios_50.py \
+            tests/brain/test_full_yaishka_parity.py \
+            -k 'not live_vision_critique' \
+            --junitxml=acceptance-results.xml | tee acceptance-log.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: reliability-results
+          name: acceptance-results
           path: |
-            reliability-results.xml
-            reliability-log.txt
+            acceptance-results.xml
+            acceptance-log.txt

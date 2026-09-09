@@ -1,76 +1,76 @@
 name: personal-ai
 
-services:
+x-brain-common: &brain-common
+  build:
+    context: .
+    dockerfile: Dockerfile
+  restart: unless-stopped
+  environment: &brain-environment
+    GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
+    BRAIN_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
+    BRAIN_DEFAULT_MODEL: ${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
+    BRAIN_FALLBACK_MODELS: ${BRAIN_FALLBACK_MODELS:-gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest}
+    UPSTREAM_LLM_BASE_URL: ${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+    EMBEDDING_PROVIDER_TYPE: ${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
+    MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
+    BRAIN_DATA_DIR: /app/data
+    BRAIN_DB_PATH: /app/data/brain.db
+    VECTOR_DB_DIR: /app/data/vector_db
+    BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
+  volumes:
+    - brain-data:/app/data
 
-  # ─── Brain API (FastAPI + Gemini) ────────────────────────────────────────────────────────
+services:
   brain_api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *brain-common
     container_name: brain-api
-    restart: unless-stopped
-    ports:
-      - "${BRAIN_API_PORT:-8000}:8000"
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - BRAIN_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
-      - BRAIN_DEFAULT_MODEL=${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
-      - UPSTREAM_LLM_BASE_URL=${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      - OPENAI_API_KEY=${OPENAI_API_KEY:-${BRAIN_API_KEY}}
-      - EMBEDDING_PROVIDER_TYPE=${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
-      - MAX_FILE_SIZE_BYTES=${MAX_FILE_SIZE_BYTES:-20971520}
-      - BRAIN_DATA_DIR=/app/data
-      - CHROMA_PATH=/app/data/chroma_db
-    volumes:
-      - brain-data:/app/data
+      <<: *brain-environment
+      BRAIN_SERVICE: api
+    ports:
+      - "${BRAIN_BIND_ADDRESS:-127.0.0.1}:${BRAIN_API_PORT:-8000}:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=5)"]
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request; r=urllib.request.Request('http://localhost:8000/health/ready',headers=dict(Authorization='Bearer '+os.environ['BRAIN_API_KEY'])); urllib.request.urlopen(r,timeout=5)"
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
+      start_period: 60s
 
-  # ─── Telegram Runner ──────────────────────────────────────────────────────────────
   telegram:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *brain-common
     container_name: brain-telegram
-    restart: unless-stopped
     command: ["python", "-m", "src.brain.channels.telegram_runner"]
     environment:
-      - GEMINI_API_KEY=${GEMINI_API_KEY}
-      - BRAIN_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
-      - BRAIN_DEFAULT_MODEL=${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
-      - UPSTREAM_LLM_BASE_URL=${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
-      - TELEGRAM_OWNER_ID=${TELEGRAM_OWNER_ID:-}
-      - MAX_FILE_SIZE_BYTES=${MAX_FILE_SIZE_BYTES:-20971520}
-      - BRAIN_DATA_DIR=/app/data
-      - CHROMA_PATH=/app/data/chroma_db
-    volumes:
-      - brain-data:/app/data
+      <<: *brain-environment
+      BRAIN_SERVICE: telegram
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:?Set TELEGRAM_OWNER_ID in .env}
     depends_on:
       brain_api:
         condition: service_healthy
+    healthcheck:
+      disable: true
 
-  # ─── Open WebUI (чат-интерфейс) ─────────────────────────────────────────────
   open-webui:
     image: ghcr.io/open-webui/open-webui:0.11.3
     container_name: open-webui
     restart: unless-stopped
     ports:
-      - "${PORT:-8080}:8080"
+      - "${WEBUI_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:
-      - PORT=8080
-      - WEBUI_SECRET_KEY=${WEBUI_SECRET_KEY}
-      - ENABLE_SIGNUP=${ENABLE_SIGNUP:-false}
-      - WEBUI_NAME=${WEBUI_NAME:-Personal AI Studio}
-      - DEFAULT_MODELS=${DEFAULT_MODELS:-personal-ai-brain}
-      - OPENAI_API_BASE_URL=http://brain-api:8000/v1
-      - OPENAI_API_KEY=${BRAIN_API_KEY:-brain-secure-stage5-federation-key-2026}
-      - CHAT_COMPLETION_TIMEOUT=120
-      - ENABLE_RAG_WEB_SEARCH=false
+      PORT: 8080
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?Generate WEBUI_SECRET_KEY in .env}
+      ENABLE_SIGNUP: ${ENABLE_SIGNUP:-false}
+      WEBUI_NAME: ${WEBUI_NAME:-Personal AI Studio}
+      DEFAULT_MODELS: ${DEFAULT_MODELS:-personal-ai-brain}
+      OPENAI_API_BASE_URL: http://brain-api:8000/v1
+      OPENAI_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
+      CHAT_COMPLETION_TIMEOUT: 120
+      ENABLE_RAG_WEB_SEARCH: "false"
     volumes:
       - open-webui-data:/app/backend/data
     depends_on:
