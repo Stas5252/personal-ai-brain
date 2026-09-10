@@ -19,21 +19,15 @@ import threading
 import time
 from typing import Any, Callable, Optional
 
-# Telegram's documented ceilings, kept deliberately conservative.
-PER_CHAT_INTERVAL = 1.05  # seconds between two messages in the same chat
-GLOBAL_INTERVAL = 1.0 / 25  # seconds between any two API calls (30/s is the wall)
-MAX_RETRY_AFTER = 60.0  # a longer pause is reported as a failure instead of slept through
+PER_CHAT_INTERVAL = 1.05
+GLOBAL_INTERVAL = 1.0 / 25
+MAX_RETRY_AFTER = 60.0
 MAX_ATTEMPTS = 3
 MAX_TRACKED_CHATS = 256
 
 
 def parse_retry_after(payload: Any) -> Optional[float]:
-    """Extracts `retry_after` from a Bot API error body, header or dict.
-
-    Returns None when the payload carries no flood-control hint at all, which
-    is the signal for the caller to stop retrying: a 400 for broken Markdown
-    will never be fixed by waiting.
-    """
+    """Extract retry_after from a Bot API error body, header or dict."""
     if payload is None:
         return None
     data: Any = payload
@@ -70,11 +64,7 @@ def parse_retry_after(payload: Any) -> Optional[float]:
 
 
 class RateLimiter:
-    """Reservation-based pacing: every call books the next free slot.
-
-    Booking under the lock and sleeping outside it keeps the order of waiting
-    senders stable and never holds the lock for the length of a pause.
-    """
+    """Reservation-based pacing for Telegram API calls."""
 
     def __init__(
         self,
@@ -96,7 +86,6 @@ class RateLimiter:
         return None if chat_id is None else str(chat_id)
 
     def _trim(self, now: float) -> None:
-        """Drops chats whose slot is long past so the map cannot grow forever."""
         if len(self._next_chat) <= MAX_TRACKED_CHATS:
             return
         stale = [key for key, moment in self._next_chat.items() if moment <= now]
@@ -104,11 +93,7 @@ class RateLimiter:
             self._next_chat.pop(key, None)
 
     def acquire(self, chat_id: Any = None) -> float:
-        """Waits for this chat's next free slot. Returns the seconds slept.
-
-        Pass chat_id=None for calls that do not count against the per-chat
-        budget (a typing action must not push the real answer a second later).
-        """
+        """Wait for the next slot and return the normalised wait duration."""
         key = self._key(chat_id)
         with self._lock:
             now = self._clock()
@@ -119,13 +104,13 @@ class RateLimiter:
             if key is not None:
                 self._next_chat[key] = earliest + self._per_chat
             self._trim(now)
-            wait = earliest - now
+            wait = round(max(0.0, earliest - now), 12)
         if wait > 0:
             self._sleep(wait)
-        return max(0.0, wait)
+        return wait
 
     def penalize(self, chat_id: Any, retry_after: Any) -> float:
-        """Blocks the chat and the whole bot for exactly retry_after seconds."""
+        """Block the chat and the whole bot for exactly retry_after seconds."""
         try:
             pause = max(0.0, float(retry_after or 0.0))
         except (TypeError, ValueError):
@@ -144,12 +129,7 @@ class RateLimiter:
         attempt: Callable[[], tuple[bool, Optional[float]]],
         max_attempts: int = MAX_ATTEMPTS,
     ) -> bool:
-        """Paces one API call and retries it only when Telegram asked to wait.
-
-        `attempt` must return (delivered, retry_after). A None retry_after
-        means the failure is not flood control, so the caller's own fallback
-        (plain text instead of Markdown, for example) has to take over.
-        """
+        """Pace one API call and retry only after Telegram flood control."""
         attempts = max(1, int(max_attempts))
         for number in range(1, attempts + 1):
             self.acquire(chat_id)
@@ -169,7 +149,7 @@ _SHARED_LOCK = threading.Lock()
 
 
 def limiter() -> RateLimiter:
-    """Returns the one limiter every Telegram sender in this process shares."""
+    """Return the process-wide limiter shared by all Telegram senders."""
     global _SHARED
     if _SHARED is None:
         with _SHARED_LOCK:
