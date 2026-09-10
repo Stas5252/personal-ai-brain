@@ -69,6 +69,7 @@ jobs:
             tests/brain/test_memory_hygiene.py \
             tests/brain/test_visual_identity.py \
             tests/brain/test_reference_vault.py \
+            tests/brain/test_reference_intake.py \
             -k 'not live_vision_critique' \
             --junitxml=acceptance-results.xml | tee acceptance-log.txt
       - uses: actions/upload-artifact@v4
