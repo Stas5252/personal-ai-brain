@@ -8,12 +8,12 @@ if [ "${BRAIN_STRICT_STARTUP:-true}" = "true" ]; then
     python /app/scripts/validate_environment.py "$SERVICE"
 fi
 
-SEED_MARKER="/app/data/.kb_seeded_v2"
+SEED_MARKER="/app/data/.kb_seeded_v3"
 if [ "$SERVICE" = "api" ] && [ ! -f "$SEED_MARKER" ]; then
-    echo "📚 Indexing bundled knowledge base..."
-    if python import_knowledge.py /app/src/brain/knowledge/ --skip-videos; then
+    echo "📚 Indexing vetted original knowledge core..."
+    if python /app/scripts/seed_vetted_knowledge.py; then
         touch "$SEED_MARKER"
-        echo "✅ Knowledge base indexed."
+        echo "✅ Vetted knowledge core indexed."
     else
         echo "❌ Knowledge indexing failed; refusing partial startup." >&2
         exit 1
