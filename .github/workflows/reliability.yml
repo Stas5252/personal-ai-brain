@@ -61,6 +61,8 @@ jobs:
             tests/brain/test_full_yaishka_parity.py \
             tests/brain/test_guided_actions.py \
             tests/brain/test_image_generation.py \
+            tests/brain/test_reply_safety.py \
+            tests/brain/test_style_learning.py \
             -k 'not live_vision_critique' \
             --junitxml=acceptance-results.xml | tee acceptance-log.txt
       - uses: actions/upload-artifact@v4

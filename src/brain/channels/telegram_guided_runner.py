@@ -1,4 +1,4 @@
-"""Telegram runner: guided actions, real onboarding and safe delivery.
+"""Telegram runner: guided actions, real onboarding, style learning, safe delivery.
 
 Everything the owner sees goes through _say(): a long answer is split before
 Telegram rejects it at 4096 characters and unbalanced Markdown is repaired,
@@ -7,6 +7,11 @@ so an answer that was computed is never lost on the way out.
 Free-form questions are answered by BrainService directly with the last turns
 of the dialogue attached — without that, a clarifying question and the answer
 to it were two unrelated events.
+
+The bot also learns the owner's own voice: /учись stores her texts, «пиши так
+же» turns the last answer into a good example and «так не пиши» stores it as
+an anti-example. StyleEngine measures those samples and every prompt is built
+from the measurements, so the voice is learned instead of imagined.
 """
 from __future__ import annotations
 
@@ -18,6 +23,8 @@ from pathlib import Path
 import src.brain.channels.telegram_runner as legacy
 from src.brain.channels.runtime_state import owner_allowed
 from src.brain.channels.telegram_media import CAPTION_LIMIT, TelegramMedia, sanitize_markdown, split_message
+from src.brain.engines.style_engine import MIN_EXEMPLARS_FOR_VOICE, StyleEngine
+from src.brain.models.style import ExemplarType
 from src.brain.services.guided_actions import ACTION_BY_LABEL, IMAGE_ACTIONS, GuidedActionService, MissingActionInput, capability_markdown
 
 HISTORY_TURNS = 6
@@ -31,7 +38,8 @@ INTRO_REQUEST = (
     "• кто твои клиенты;\n"
     "• какой стиль и тон тебе близок, какие слова раздражают;\n"
     "• цели на ближайшие полгода.\n\n"
-    "Чего не скажешь — я не придумаю, просто переспрошу позже."
+    "Чего не скажешь — я не придумаю, просто переспрошу позже.\n"
+    "А пришлёшь 2-3 своих текста через /учись — начну писать твоим голосом, а не общим."
 )
 
 PHOTO_HINT = (
@@ -46,16 +54,36 @@ STYLE_GUARD_PROMPT = (
     "Смысл, факты, цифры и структура остаются прежними. Ничего не добавляй от себя."
 )
 
+LEARN_REQUEST = (
+    "Пришли следующим сообщением свой текст — пост, сторис, переписку с клиенткой или прайс.\n"
+    "Я замерю длину фраз, эмодзи, пунктуацию и твои слова — и буду писать так же.\n"
+    "Отмена — /cancel."
+)
+
+APPROVE_MARKERS = ("вот так пиши", "так пиши", "пиши так же", "сохрани этот стиль", "запомни этот стиль", "запомни стиль")
+REJECT_MARKERS = ("так не пиши", "так больше не пиши", "никогда так не пиши", "убери этот стиль")
+
+CATEGORY_LABELS = {
+    "POST": "пост",
+    "STORIES": "сторис",
+    "REELS_SCRIPT": "сценарий рилс",
+    "CLIENT_DM": "переписка с клиенткой",
+    "OFFER": "прайс/оффер",
+    "DESCRIPTION": "описание",
+}
+
 
 class GuidedBot(legacy.Bot):
     def __init__(self, api, brain, state, owner):
-        super().__init__(api, brain, state, owner); self.guided=GuidedActionService(); self.media=TelegramMedia()
+        super().__init__(api, brain, state, owner); self.guided=GuidedActionService(); self.media=TelegramMedia(); self.style=StyleEngine()
 
     def _key(self): return f"guided_action:{self.owner}"
 
     def _intro_key(self): return f"guided_intro:{self.owner}"
 
     def _history_key(self): return f"guided_history:{self.owner}"
+
+    def _learn_key(self): return f"guided_learn:{self.owner}"
 
     @staticmethod
     def _chat_id(message):
@@ -108,6 +136,8 @@ class GuidedBot(legacy.Bot):
         if prices: rows.append("💰 Прайс: "+", ".join(f"{k}: {v}" for k,v in list(prices.items())[:4]))
         goals=getattr(profile,"goals",None) or []
         if goals: rows.append("🎯 Цели: "+", ".join(str(g) for g in goals[:4]))
+        visual=str(getattr(profile,"visual_preferences","") or "").strip()
+        if visual: rows.append("📷 Визуальный стиль: "+visual[:180])
         forbidden=getattr(profile,"forbidden_words",None) or []
         if forbidden: rows.append("🚫 Стоп-слова: "+", ".join(str(w) for w in forbidden[:6]))
         return "\n".join(rows)
@@ -119,7 +149,7 @@ class GuidedBot(legacy.Bot):
             self.state.put(self._intro_key(),None)
             return self._say(chat,f"С возвращением, {profile.identity}! Помню твой профиль:\n\n"
                                   f"{self._profile_card(profile)}\n\nВыбери раздел в меню или просто напиши задачу. "
-                                  "Обновить данные — /знакомство, посмотреть память — /память.")
+                                  "Обновить данные — /знакомство, память — /память, мой стиль — /стиль.")
         self.state.put(self._intro_key(),"1")
         return self._say(chat,INTRO_REQUEST)
 
@@ -162,6 +192,11 @@ class GuidedBot(legacy.Bot):
         try: self.state.put(self._history_key(),json.dumps(history[-(HISTORY_TURNS*2):],ensure_ascii=False))
         except Exception: pass
 
+    def _last_answer(self):
+        for turn in reversed(self._history()):
+            if turn.get("role")=="assistant": return str(turn.get("content") or "").strip()
+        return ""
+
     # -- input --------------------------------------------------------------
     def _collect(self,message,temp):
         """Returns (text, image_path). Every download is tracked in temp.
@@ -202,6 +237,104 @@ class GuidedBot(legacy.Bot):
                 return self._deliver(chat,result)
         finally:
             for item in temp: Path(item).unlink(missing_ok=True)
+
+    # -- style learning -----------------------------------------------------
+    @staticmethod
+    def _reply_text(message):
+        """Text of the message the owner replied to, if any."""
+        source=message.get("reply_to_message") or {}
+        return (source.get("text") or source.get("caption") or "").strip()
+
+    def _remember_preference(self,text,positive):
+        """Stylistic verdict also lands in memory, not only in the vault."""
+        try:
+            from src.brain.models.memory import MemoryType
+            self.brain.memory_engine.add_memory(
+                content=("Стиль, который нравится: " if positive else "Стилевой запрет: ")+str(text)[:300],
+                memory_type=MemoryType.PREFERENCE,importance=0.9 if positive else 0.95,force=True)
+        except Exception: pass
+
+    def _learn_style(self,text,exemplar_type=ExemplarType.GOOD_EXAMPLE):
+        """Stores one of her texts as a sample and reports what was measured."""
+        try: saved=self.style.learn_from_text(text,exemplar_type=exemplar_type)
+        except Exception as exc: return f"Не смог сохранить образец: {exc}"
+        if saved is None: return "Для образца текст коротковат — пришли настоящий пост, сторис, прайс или переписку."
+        label=CATEGORY_LABELS.get(saved.category.value,saved.category.value)
+        if exemplar_type==ExemplarType.BAD_EXAMPLE:
+            return f"Понял, так больше не пишу. Забраковано как антипример ({label}): «{saved.title}»."
+        try: voice=self.style.analyze_voice()
+        except Exception: voice={}
+        head=f"Запомнил твой {label}: «{saved.title}»."
+        if voice.get("learned"):
+            return (head+f"\n\nВсего образцов: {voice['exemplar_count']}. Твой голос замерен: "
+                    f"предложения ~{voice['sentence_length_avg']} слов, {voice['emoji_frequency'].lower()}, "
+                    f"{voice['punctuation_habits']}. Пишу по этим меркам.")
+        left=max(0,MIN_EXEMPLARS_FOR_VOICE-int(voice.get("exemplar_count") or 0))
+        return head+f"\n\nНужно ещё {left} — и я перестану писать «вообще» и начну писать тобой."
+
+    def _style_feedback(self,message,text):
+        """«пиши так же» / «так не пиши» превращают ответ в эталон или антипример."""
+        lowered=(text or "").lower()
+        if not lowered or len(lowered)>120: return None
+        rejected=any(marker in lowered for marker in REJECT_MARKERS)
+        approved=(not rejected) and any(marker in lowered for marker in APPROVE_MARKERS)
+        if not rejected and not approved: return None
+        sample=self._reply_text(message) or self._last_answer()
+        if not sample: return "Не вижу, о каком тексте речь — ответь этой фразой на нужное сообщение."
+        self._remember_preference(text,approved)
+        return self._learn_style(sample,ExemplarType.GOOD_EXAMPLE if approved else ExemplarType.BAD_EXAMPLE)
+
+    def _style_card(self):
+        """/стиль: честный отчёт о том, чему бот научился на её текстах."""
+        try: summary=self.style.vault_summary()
+        except Exception as exc: return f"Хранилище стиля недоступно: {exc}"
+        voice=summary.get("voice") or {}
+        by_type=summary.get("by_type") or {}
+        good=int(by_type.get("GOOD_EXAMPLE") or 0); bad=int(by_type.get("BAD_EXAMPLE") or 0)
+        profile=self._profile()
+        visual=str(getattr(profile,"visual_preferences","") or "").strip()
+        if not summary.get("total"):
+            return ("🎨 Я ещё не видел ни одного твоего текста, поэтому пишу нейтрально и твой голос не выдумываю.\n\n"
+                    "Пришли 3 своих текста: /учись <текст> — или отправь текст и ответь на него «пиши так же».\n"
+                    f"📷 Визуальный стиль для фото: {visual or 'не задан — /фотостиль <описание>'}")
+        rows=["🎨 Чему я научился на твоих текстах",""]
+        cats=", ".join(f"{CATEGORY_LABELS.get(k,k)}: {v}" for k,v in (summary.get("by_category") or {}).items())
+        rows.append(f"Образцов: {good}"+(f" ({cats})" if cats else ""))
+        if bad: rows.append(f"Антипримеров: {bad}")
+        if voice.get("learned"):
+            rows+=["","Замерено по твоим текстам:",
+                   f"• Предложения: ~{voice.get('sentence_length_avg')} слов",
+                   f"• Эмодзи: {voice.get('emoji_frequency')}",
+                   f"• Пунктуация: {voice.get('punctuation_habits')}"]
+            if voice.get("signature_words"): rows.append("• Твои слова: "+", ".join(voice["signature_words"][:8]))
+            if voice.get("signature_phrases"): rows.append("• Твои связки: "+"; ".join(voice["signature_phrases"][:4]))
+            rate=float(voice.get("cta_rate") or 0.0)
+            if rate>=0.5: rows.append("• Призыв в конце — почти всегда, сохраняю")
+            elif rate<=0.2: rows.append("• Призыв в конце ставишь редко — не навязываю")
+        else:
+            left=max(0,MIN_EXEMPLARS_FOR_VOICE-int(voice.get("exemplar_count") or 0))
+            rows+=["",f"Голос ещё не выучен: нужно ещё {left} текст(а)."]
+        rows+=["",f"📷 Визуальный стиль для фото: {visual or 'не задан — /фотостиль <описание>'}",
+               "","Добавить образец: /учись <текст>. Забраковать ответ: ответь на него «так не пиши»."]
+        return "\n".join(rows)
+
+    def _photo_style(self,text):
+        """/фотостиль: пишет визуальный почерк в профиль, откуда его берёт генератор фото."""
+        description=text.split(" ",1)[1].strip() if " " in text else ""
+        profile=self._profile()
+        if not description:
+            current=str(getattr(profile,"visual_preferences","") or "").strip()
+            if current: return f"📷 Сейчас я генерирую фото в таком стиле:\n\n{current}\n\nПоменять: /фотостиль <описание>"
+            return ("Визуальный стиль пока не задан. Напиши так:\n"
+                    "/фотостиль мягкий плёночный свет, тёплые тона, живая кожа без пластика, минимум реквизита")
+        if profile is None: return "Профиль недоступен: база не отвечает."
+        try:
+            profile.visual_preferences=description
+            self.brain.profile_engine.save_profile(profile)
+        except Exception as exc: return f"Не смог сохранить визуальный стиль: {exc}"
+        try: self.style.learn_visual_style(description)
+        except Exception: pass
+        return f"📷 Запомнил. Теперь подставляю это в каждую генерацию фото:\n\n{description}"
 
     # -- free-form chat -----------------------------------------------------
     def _style_guard(self,answer,benchmark):
@@ -255,33 +388,48 @@ class GuidedBot(legacy.Bot):
         tail=", ".join(f"{k}: {v}" for k,v in active.items())
         body="🧠 Что я помню:\n\n"+"\n".join(f"• {line}" for line in lines)
         if tail: body+=f"\n\nАктивные записи — {tail}."
-        return body+"\n\nУдалить лишнее: /забудь <фраза>"
+        return body+"\n\nУдалить лишнее: /забудь <фраза>. Что я знаю о твоём стиле: /стиль"
 
     def _forget(self,text):
         phrase=text.split(" ",1)[1].strip() if " " in text else ""
         if not phrase: return "Напиши так: /забудь тариф 15000"
         try: removed=self.brain.memory_engine.forget_matching(phrase)
         except Exception as exc: return f"Не смог почистить память: {exc}"
-        return f"Удалил записей: {removed}." if removed else "Ничего похожего в памяти нет."
+        try: dropped=self.style.forget_exemplars(phrase)
+        except Exception: dropped=0
+        if not removed and not dropped: return "Ничего похожего ни в памяти, ни в образцах стиля нет."
+        parts=[]
+        if removed: parts.append(f"записей памяти: {removed}")
+        if dropped: parts.append(f"образцов стиля: {dropped}")
+        return "Удалил — "+", ".join(parts)+"."
 
     # -- entry point --------------------------------------------------------
     def reply(self,message):
         if not owner_allowed(message,self.owner): return None
         text=(message.get("text") or "").strip(); chat=self._chat_id(message); self._track_activity(); pending=self.state.get(self._key())
         if text in {"/capabilities","/возможности"}: return self._say(chat,capability_markdown())
-        if text in {"/start","/знакомство"}: self.state.put(self._key(),None); return self._greet(chat)
+        if text in {"/start","/знакомство"}: self.state.put(self._key(),None); self.state.put(self._learn_key(),None); return self._greet(chat)
         if text in {"/profile","/профиль"}:
             profile=self._profile()
             if profile is None: return self._say(chat,"Профиль сейчас недоступен: база не отвечает.")
             if not self._known(profile): return self._say(chat,"Профиль почти пустой. Напиши /знакомство — расскажешь о себе, и я запомню.")
             return self._say(chat,self._profile_card(profile)+"\n\nОбновить: /знакомство")
         if text in {"/memory","/память"}: return self._say(chat,self._memory_digest())
+        if text in {"/стиль","/style"}: return self._say(chat,self._style_card())
+        if text.startswith("/учись") or text.startswith("/learn"):
+            sample=text.split(" ",1)[1].strip() if " " in text else self._reply_text(message)
+            if not sample:
+                self.state.put(self._learn_key(),"1"); return self._say(chat,LEARN_REQUEST)
+            return self._say(chat,self._learn_style(sample))
+        if text.startswith("/фотостиль") or text.startswith("/photostyle"): return self._say(chat,self._photo_style(text))
         if text.startswith("/забудь") or text.startswith("/forget"): return self._say(chat,self._forget(text))
-        if text=="/cancel" and pending: self.state.put(self._key(),None); return self._say(chat,"Мастер остановлен.")
+        if text=="/cancel" and (pending or self.state.get(self._learn_key())):
+            self.state.put(self._key(),None); self.state.put(self._learn_key(),None); return self._say(chat,"Остановил.")
         if text.startswith("/"):
             answer=super().reply(message)
             return self._say(chat,answer) if isinstance(answer,str) else answer
         if text in ACTION_BY_LABEL:
+            self.state.put(self._learn_key(),None)
             action=ACTION_BY_LABEL[text]; start=self.guided.start(action.action_id)
             if start["requires_input"]:
                 self.state.put(self._key(),action.action_id)
@@ -289,9 +437,20 @@ class GuidedBot(legacy.Bot):
             with self.media.typing(chat,self._status(action.action_id)):
                 result=self.guided.execute(action.action_id,self.brain,use_llm=True)
             return self._say(chat,self._deliver(chat,result))
+        if self.state.get(self._learn_key()):
+            temp=[]
+            try:
+                try: body,_=self._collect(message,temp)
+                except ValueError as exc: return self._say(chat,str(exc))
+            finally:
+                for item in temp: Path(item).unlink(missing_ok=True)
+            self.state.put(self._learn_key(),None)
+            return self._say(chat,self._learn_style(body))
         if pending:
             try: return self._say(chat,self._execute(message,pending,chat))
             except (MissingActionInput,ValueError) as exc: return self._say(chat,str(exc))
+        verdict=self._style_feedback(message,text)
+        if verdict is not None: return self._say(chat,verdict)
         if self.state.get(self._intro_key()):
             learned=self._learn_about_owner(message,chat)
             if learned is not None: return self._say(chat,learned)
