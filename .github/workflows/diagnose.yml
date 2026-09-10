@@ -1,17 +1,13 @@
 name: Diagnose acceptance
-
 on:
   push:
     branches: ['feature/**', 'fix/**']
   workflow_dispatch:
-
 permissions:
   contents: read
-
 concurrency:
   group: diagnose-${{ github.ref }}
   cancel-in-progress: true
-
 jobs:
   compile:
     runs-on: ubuntu-latest
@@ -19,7 +15,29 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [src, scripts, tests]
+        target:
+          - src/brain/api/app.py
+          - src/brain/api/routes/image_routes.py
+          - src/brain/channels/bot_config.py
+          - src/brain/channels/task_queue.py
+          - src/brain/channels/telegram_adapter.py
+          - src/brain/channels/telegram_guided_runner.py
+          - src/brain/channels/telegram_media.py
+          - src/brain/channels/telegram_ratelimit.py
+          - src/brain/config.py
+          - src/brain/engines/context_engine.py
+          - src/brain/engines/image_engine.py
+          - src/brain/engines/memory_engine.py
+          - src/brain/engines/memory_hygiene.py
+          - src/brain/engines/outreach_policy.py
+          - src/brain/engines/proactive_engine.py
+          - src/brain/engines/profile_engine.py
+          - src/brain/engines/promotion_engine.py
+          - src/brain/engines/reference_vault.py
+          - src/brain/engines/style_engine.py
+          - src/brain/engines/visual_identity.py
+          - src/brain/services/guided_actions.py
+          - src/brain/services/reference_intake.py
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,9 +46,8 @@ jobs:
           cache: pip
       - name: Install
         run: pip install -r requirements.txt
-      - name: Compile target
-        run: python -m compileall -q '${{ matrix.target }}'
-
+      - name: Compile file
+        run: python -m py_compile '${{ matrix.target }}'
   lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -40,11 +57,8 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install
-        run: pip install -r requirements.txt ruff
-      - name: Lint for correctness only
-        run: ruff check src scripts tests --select E9,F63,F7,F82 --output-format github
-
+      - run: pip install -r requirements.txt ruff
+      - run: ruff check src scripts tests --select E9,F63,F7,F82 --output-format github
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 25
@@ -80,7 +94,5 @@ jobs:
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install
-        run: pip install -r requirements.txt
-      - name: Run one suite
-        run: pytest -q '${{ matrix.target }}' -k 'not live_vision_critique'
+      - run: pip install -r requirements.txt
+      - run: pytest -q '${{ matrix.target }}' -k 'not live_vision_critique'
