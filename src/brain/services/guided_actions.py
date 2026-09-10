@@ -1,11 +1,11 @@
 """Stateful user-facing actions shared by Telegram and API clients."""
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any
 
 from src.brain.engines.promotion_engine import PromotionEngine
+from src.brain.services.pricing import PriceNotFound, format_money, parse_base_price
 
 
 class MissingActionInput(ValueError):
@@ -82,8 +82,14 @@ class GuidedActionService:
             source=text+(("\n"+self._vision(brain,image_path,"Транскрибируй претензию.")) if image_path else "")
             data=brain.sales_engine.handle_cancellation_and_reschedule(source,use_llm=use_llm) if any(w in source.lower() for w in ("отмен","перенос","погод","забол")) else brain.sales_engine.mediate_client_dispute(source,profile=profile,use_llm=use_llm)
         elif action_id=="sales.price":
-            match=re.search(r"\d[\d\s]{3,}",text); base=int(re.sub(r"\s","",match.group())) if match else 20000; money=lambda x:f"{x:,} ₽".replace(","," "); shared="объём и срок — только из договора"
-            data={"status":"draft","tiers":[{"name":"ЛАЙТ","price":money(int(base*.7)),"features":["бриф","одна концепция",shared]},{"name":"ОПТИМАЛЬНЫЙ","price":money(base),"features":["мудборд","поддержка с образом",shared]},{"name":"ПРЕМИУМ","price":money(int(base*1.6)),"features":["продюсирование","несколько сцен",shared]}],"note":"Проверьте себестоимость, налог, предоплату и сроки."}
+            # A price list is a business decision. If the owner did not state a
+            # base price we ask for one instead of inventing a number that
+            # would quietly become their real pricing.
+            source=text+(("\n"+self._vision(brain,image_path,"Перепиши видимые цены и услуги дословно.")) if image_path else "")
+            try: base=parse_base_price(source)
+            except PriceNotFound as exc: raise MissingActionInput(str(exc)) from exc
+            shared="объём и срок — только из договора"
+            data={"status":"draft","base_price":format_money(base),"tiers":[{"name":"ЛАЙТ","price":format_money(int(base*.7)),"features":["бриф","одна концепция",shared]},{"name":"ОПТИМАЛЬНЫЙ","price":format_money(base),"features":["мудборд","поддержка с образом",shared]},{"name":"ПРЕМИУМ","price":format_money(int(base*1.6)),"features":["продюсирование","несколько сцен",shared]}],"note":"База взята из твоих данных. Проверьте себестоимость, налог, предоплату и сроки."}
         elif action_id=="sales.proposal": data=self.promo.build_campaign_offer(text,profile,use_llm)
         elif action_id=="shoot.moodboard":
             location=self._vision(brain,image_path,"Опиши свет, цвета, фактуры и ограничения локации.") if image_path else ""; data=brain.shooting_engine.generate_moodboard_card(text or "Концепция по локации",location=location,use_llm=use_llm)
