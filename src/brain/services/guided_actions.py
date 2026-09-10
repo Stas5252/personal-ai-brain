@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from src.brain.engines.image_engine import STATUS_AVAILABLE, ImageEngine
 from src.brain.engines.promotion_engine import PromotionEngine
 from src.brain.services.pricing import PriceNotFound, format_money, parse_base_price
 
@@ -27,20 +28,24 @@ class Action:
 _RAW = (
 ("content.reels","🎥 Идеи Reels","О чём и для кого нужны Reels?",0),("content.week","📝 Контент-план","",0),("content.stories","📖 Сторис-арка","Назови тему и оффер.",0),("content.caption","✍️ Подпись к фото","Опиши реальную историю и цель.",1),("content.post","💡 Идея поста","Назови тему или вопрос клиента.",0),("content.script","🎙️ Сценарий Reels","Назови тему, аудиторию и длительность.",0),("content.hooks","🔥 Хуки для контента","",0),("content.rubrics","📅 Рубрикатор","",0),
 ("sales.dialogue","💬 Ответ клиенту","Пришли текст или скриншот переписки.",1),("sales.dispute","⚖️ Спорная ситуация","Опиши ситуацию или пришли претензию.",1),("sales.price","💰 Прайс-лист","Укажи базовую цену.",1),("sales.contract","📋 Договор","Опиши формат, страну и спорный пункт.",0),("sales.script","🎯 Скрипт продажи","Опиши услугу и клиента.",0),("sales.proposal","📊 КП клиенту","Опиши задачу и реальные условия.",0),("sales.repeat","🔄 Повторная продажа","Опиши прошлую съёмку и повод.",0),("sales.review","⭐ Запрос отзыва","Опиши завершённую съёмку.",0),
-("shoot.moodboard","📸 Мудборд съёмки","Опиши идею или пришли фото локации.",1),("shoot.audit","✨ Разбор аккаунта","Пришли скриншот или текст профиля.",1),("shoot.critique","🔍 Разбор фото","Пришли фотографию.",1),("shoot.music","🎵 Подбор треков","Опиши серию и формат.",0),("shoot.outfits","👗 Образы клиента","Опиши героя, сезон и локацию.",0),("shoot.locations","📍 Локации","Укажи город, жанр и сезон.",0),("shoot.photoday","🗓️ Фотодень","Опиши тему, город и предполагаемый чек.",0),("shoot.brief","📦 Бриф клиента","Укажи жанр и тип клиента.",0),
+("shoot.moodboard","📸 Мудборд съёмки","Опиши идею или пришли фото локации.",1),("shoot.audit","✨ Разбор аккаунта","Пришли скриншот или текст профиля.",1),("shoot.critique","🔍 Разбор фото","Пришли фотографию.",1),("shoot.music","🎵 Подбор треков","Опиши серию и формат.",0),("shoot.outfits","👗 Образы клиента","Опиши героя, сезон и локацию.",0),("shoot.locations","📍 Локации","Укажи город, жанр и сезон.",0),("shoot.photoday","🗓️ Фотодень","Опиши тему, город и предполагаемый чек.",0),("shoot.brief","📦 Бриф клиента","Укажи жанр и тип клиента.",0),("shoot.generate","🎨 Сгенерировать фото","Опиши кадр: сцена, герой, свет, настроение.",1),("shoot.restyle","♻️ Перерисовать кадр","Пришли фото и напиши, что изменить.",1),
 ("promo.strategy","📢 Стратегия продвижения","",0),("promo.collabs","🤝 Коллаборации","",0),("promo.tags","🏷️ Хэштеги","",0),("promo.competitors","📈 Анализ конкурентов","Пришли материалы минимум по двум конкурентам.",1),("promo.newsletter","💌 Email/рассылка","Опиши подтверждённый оффер.",0),("promo.offer","🎁 Акция/оффер","Опиши услугу, сезон и задачу.",0),("promo.reviews","🌟 Отзывы в контент","Пришли реальный текст отзыва.",0),("work.today","📅 План дня","",0))
 ACTIONS = tuple(Action(a,b,c,bool(d)) for a,b,c,d in _RAW)
 ACTION_BY_ID = {a.action_id:a for a in ACTIONS}
 ACTION_BY_LABEL = {a.label:a for a in ACTIONS}
+# Actions whose payload is a real file on disk instead of text. Telegram sends
+# them as a photo, the HTTP API returns a download URL.
+IMAGE_ACTIONS = frozenset({"shoot.generate", "shoot.restyle"})
 
 
 def capability_markdown():
-    return "🧭 **32 guided-функции**\n\n" + "\n".join(f"• {a.label}" for a in ACTIONS) + "\n\nВыбери кнопку — бот запросит недостающие данные."
+    return f"🧭 **{len(ACTIONS)} guided-функции**\n\n" + "\n".join(f"• {a.label}" for a in ACTIONS) + "\n\nВыбери кнопку — бот запросит недостающие данные."
 
 
 class GuidedActionService:
     def __init__(self):
         self.promo = PromotionEngine()
+        self.images = ImageEngine()
 
     def start(self, action_id):
         action = ACTION_BY_ID[action_id]
@@ -63,6 +68,22 @@ class GuidedActionService:
         result = brain.shooting_engine.critique_shot(path, prompt=prompt)
         if result.get("status") != "AVAILABLE" or not result.get("description"): raise ValueError("Vision недоступен; пришли данные текстом.")
         return result["description"]
+
+    def _image(self, profile, text, image_path=None, use_llm=True):
+        """Returns a real generated file or an explicit UNAVAILABLE reason."""
+        try:
+            return self.images.generate(request=text, profile=profile, reference_image_path=image_path, use_llm=use_llm)
+        except ValueError as exc:
+            raise MissingActionInput(str(exc)) from exc
+
+    @staticmethod
+    def _image_markdown(action, data: Any):
+        if data.get("status") == STATUS_AVAILABLE:
+            head = f"✅ **{action.label}**\n\nФайл: `{data.get('file_name')}` · модель: {data.get('model')}"
+            if data.get("reference_used"): head += " · исходный кадр учтён"
+            notes = str(data.get("notes") or "").strip()
+            return f"{head}\n\n{notes}" if notes else head
+        return f"⚠️ **{action.label}**\n\nИзображение не создано. Причина: {data.get('reason')}"
 
     def execute(self, action_id, brain, text="", image_path=None, use_llm=True):
         action = ACTION_BY_ID[action_id]
@@ -99,6 +120,11 @@ class GuidedActionService:
             data=brain.shooting_engine.analyze_photo_with_critique(image_path,user_question=text or None)
         elif action_id=="shoot.music":
             data=brain.shooting_engine.recommend_music_soundtrack(text,use_llm=use_llm); data["licensing_note"]="Проверьте доступность и лицензию трека."
+        elif action_id in IMAGE_ACTIONS:
+            # Restyle edits an existing frame, so a photo is mandatory: without
+            # it we would quietly generate something unrelated.
+            if action_id=="shoot.restyle" and not image_path: raise MissingActionInput(action.prompt)
+            data=self._image(profile,text,image_path,use_llm)
         elif action_id=="promo.strategy": data=self.promo.build_monthly_strategy(profile,use_llm=use_llm)
         elif action_id=="promo.collabs": data=self.promo.generate_collaboration_ideas(profile,use_llm)
         elif action_id=="promo.tags": data=self.promo.build_hashtag_clusters(profile,use_llm)
@@ -108,4 +134,5 @@ class GuidedActionService:
         elif action_id=="promo.reviews": data=self.promo.repurpose_review(text,profile,use_llm)
         elif action_id=="work.today": data=brain.proactive_engine.generate_daily_plan(profile=profile,use_llm=use_llm)
         else: raise KeyError(action_id)
-        return {"action_id":action_id,"title":action.label,"data":data,"markdown":f"✅ **{action.label}**\n\n{self._format(data)}"}
+        markdown = self._image_markdown(action,data) if action_id in IMAGE_ACTIONS else f"✅ **{action.label}**\n\n{self._format(data)}"
+        return {"action_id":action_id,"title":action.label,"data":data,"markdown":markdown,"image_path":data.get("image_path") if isinstance(data,dict) else None}
