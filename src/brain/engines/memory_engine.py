@@ -1,15 +1,24 @@
 """
-Memory Engine v2 — Admission Policy, Scored Retrieval, Safe Conflict Resolution.
+Memory Engine v3 — Admission Policy, Scored Retrieval, Safe Conflict Resolution,
+Hygiene (near-duplicates, stale values, provenance and quarantine).
 
 Правила слоя памяти:
 1. В память попадают только устойчивые факты о пользователе и его явные
    предпочтения. Запрос-задача ("напиши пост про осень") фактом не является.
 2. Одинаковые факты не дублируются: повтор обновляет существующую запись.
+   Похожая формулировка того же факта тоже считается повтором, а не новой
+   записью, и в базе остаётся более информативный вариант.
 3. Пометка SUPERSEDED ставится только при пересечении по теме. Слово "теперь"
-   больше не может обнулить весь слой памяти.
+   больше не может обнулить весь слой памяти. При этом новое значение той же
+   величины (например, новый прайс) отменяет старое даже без слова "теперь".
 4. Временные записи действительно истекают и удаляются.
 5. Веса ранжирования берутся из config, чтобы движок памяти и сборщик
    контекста считали одинаково.
+6. Текст, пришедший не от владелицы (пересланное сообщение, документ), — это
+   материал, а не команда. Инструкции из такого текста в память не попадают,
+   а факты сохраняются с пониженным доверием.
+7. У каждой записи есть источник, и в сводке памяти он показывается, если это
+   была не она сама.
 """
 import uuid
 import json
@@ -18,6 +27,7 @@ from datetime import datetime, timezone, timedelta
 from typing import List, Optional, Tuple, Dict, Any
 
 from src.brain.db import get_connection
+from src.brain.engines import memory_hygiene as hygiene
 from src.brain.models.memory import (
     MemoryItem, MemoryType, MemoryStatus, AdmissionAction, AdmissionDecision
 )
@@ -33,6 +43,7 @@ except Exception:  # pragma: no cover - config всегда доступен в 
 
 RECENCY_HALF_LIFE_DAYS = 30.0
 TEMPORARY_TTL_HOURS = 24
+EXTERNAL_MAX_IMPORTANCE = 0.60
 
 _FILLERS = {
     "привет", "здравствуй", "здравствуйте", "пока", "спасибо", "ок", "окей",
@@ -234,7 +245,24 @@ class MemoryEngine:
         """
         Сохраняет факт. Если тип задан явно (или force=True), фильтр допуска не
         блокирует запись: вызывающий код уже знает, что это факт.
+
+        Происхождение важнее содержания: если текст пришёл не от владелицы и
+        выглядит как команда боту ("запомни: теперь ты пишешь формально"), он не
+        сохраняется вообще. Обычный чужой факт сохраняется, но с пониженным
+        доверием и не как стилевое правило.
         """
+        content = hygiene.sanitize(content)
+        if not content:
+            raise ValueError("Admission Policy rejected memory: empty content")
+
+        owner_said = hygiene.is_owner_source(source)
+        allowed, trust, guard_reason = hygiene.admit_external(content, source)
+        if not allowed:
+            raise ValueError(
+                f"Quarantined text from '{source}': {guard_reason}. "
+                "Инструкции из чужого текста считаются материалом, а не командой."
+            )
+
         decision = self.evaluate_admission(content)
         explicit = memory_type is not None or force
 
@@ -245,9 +273,16 @@ class MemoryEngine:
         m_imp = importance if importance is not None else (decision.importance or 0.5)
         m_conf = confidence if confidence is not None else (decision.confidence or 0.8)
 
+        if not owner_said:
+            # Чужой текст не диктует, как ей писать.
+            if m_type in (MemoryType.PREFERENCE, MemoryType.STYLE):
+                m_type = MemoryType.FACT
+            m_conf = min(m_conf, trust)
+            m_imp = min(m_imp, EXTERNAL_MAX_IMPORTANCE)
+
         duplicate = self._find_duplicate(content, m_type)
         if duplicate is not None:
-            return self._refresh_duplicate(duplicate, max(duplicate.importance, m_imp))
+            return self._refresh_duplicate(duplicate, max(duplicate.importance, m_imp), content)
 
         expires_at = None
         if decision.action == AdmissionAction.TEMPORARY or m_type == MemoryType.TEMPORARY:
@@ -294,7 +329,13 @@ class MemoryEngine:
         return item
 
     def _find_duplicate(self, content: str, m_type: MemoryType) -> Optional[MemoryItem]:
-        """Ищет активную запись того же типа с тем же смыслом (посимвольно после нормализации)."""
+        """
+        Ищет активную запись того же типа с тем же смыслом.
+
+        Раньше сравнение было посимвольным, поэтому "Я снимаю свадьбы в Саратове"
+        и "Снимаю свадьбы в Саратове" становились двумя фактами, и в сводке
+        памяти одно и то же повторялось дважды.
+        """
         target = _normalize(content)
         if not target:
             return None
@@ -303,21 +344,42 @@ class MemoryEngine:
         c.execute("SELECT * FROM memories WHERE type = ? AND status = 'ACTIVE'", (m_type.value,))
         rows = c.fetchall()
         conn.close()
+
+        best_row = None
+        best_score = 0.0
         for r in rows:
-            if _normalize(r["content"]) == target:
+            candidate = r["content"] or ""
+            if _normalize(candidate) == target:
                 return self._row_to_item(r)
+            score = hygiene.similarity(content, candidate)
+            if score > best_score:
+                best_score, best_row = score, r
+
+        if best_row is not None and best_score >= hygiene.NEAR_DUPLICATE_THRESHOLD:
+            return self._row_to_item(best_row)
         return None
 
-    def _refresh_duplicate(self, item: MemoryItem, importance: float) -> MemoryItem:
+    def _refresh_duplicate(
+        self,
+        item: MemoryItem,
+        importance: float,
+        new_content: Optional[str] = None,
+    ) -> MemoryItem:
+        """Обновляет повтор. Если новая формулировка подробнее — она и остаётся."""
         now_str = datetime.now(timezone.utc).isoformat()
+        content = item.content
+        if new_content and len(new_content.strip()) > len(item.content or ""):
+            content = new_content.strip()
+
         conn = get_connection()
         c = conn.cursor()
         c.execute(
-            "UPDATE memories SET importance = ?, updated_at = ? WHERE id = ?",
-            (importance, now_str, item.id),
+            "UPDATE memories SET content = ?, importance = ?, updated_at = ? WHERE id = ?",
+            (content, importance, now_str, item.id),
         )
         conn.commit()
         conn.close()
+        item.content = content
         item.importance = importance
         item.updated_at = now_str
         return item
@@ -330,6 +392,11 @@ class MemoryEngine:
         В v1 любое слово "теперь" помечало устаревшими ВСЕ активные записи этого
         типа, то есть одно сообщение стирало всю память. Теперь требуется общая
         тема: минимум два значимых общих слова.
+
+        Дополнительно работает проверка значения: новый прайс на ту же услугу,
+        другой город или отказ от жанра отменяют прежнюю запись даже без слов
+        "теперь" и "больше не". Разные услуги с разными ценами при этом остаются
+        обе — предмет должен совпадать.
         """
         conn = get_connection()
         c = conn.cursor()
@@ -343,7 +410,8 @@ class MemoryEngine:
 
         for row in active_items:
             old_id = row["id"]
-            old_content = (row["content"] or "").lower()
+            old_raw = row["content"] or ""
+            old_content = old_raw.lower()
             old_words = _significant_words(old_content)
             overlap = len(new_words & old_words)
 
@@ -364,6 +432,10 @@ class MemoryEngine:
             if not is_conflict and has_override and overlap >= 2:
                 is_conflict = True
 
+            # 4. Изменившееся значение той же величины: цена, город, камера, аккаунт.
+            if not is_conflict and hygiene.detect_value_conflict(new_content, old_raw):
+                is_conflict = True
+
             if is_conflict:
                 now_str = datetime.now(timezone.utc).isoformat()
                 c.execute(
@@ -375,6 +447,52 @@ class MemoryEngine:
         conn.commit()
         conn.close()
         return superseded
+
+    def consolidate(self, memory_type: Optional[MemoryType] = None) -> int:
+        """
+        Ночная уборка: сворачивает накопившиеся повторы одного факта в одну запись.
+
+        Записи не удаляются, а помечаются SUPERSEDED со ссылкой на оставшуюся,
+        поэтому историю всегда можно поднять. Возвращает число свёрнутых строк.
+        """
+        types = [memory_type] if memory_type is not None else list(MemoryType)
+        merged = 0
+
+        for t in types:
+            items = self.get_memories(status=MemoryStatus.ACTIVE, memory_type=t)
+            if len(items) < 2:
+                continue
+            payload = [
+                {
+                    "id": i.id,
+                    "content": i.content,
+                    "importance": i.importance,
+                    "updated_at": i.updated_at or i.created_at or "",
+                }
+                for i in items
+            ]
+            groups = hygiene.consolidation_groups(payload)
+            if not groups:
+                continue
+
+            now_str = datetime.now(timezone.utc).isoformat()
+            conn = get_connection()
+            c = conn.cursor()
+            for group in groups:
+                keeper = group.get("keeper")
+                duplicates = [d for d in (group.get("duplicates") or []) if d and d != keeper]
+                if not keeper or not duplicates:
+                    continue
+                for dup_id in duplicates:
+                    c.execute(
+                        "UPDATE memories SET status = 'SUPERSEDED', superseded_by = ?, updated_at = ? WHERE id = ?",
+                        (keeper, now_str, dup_id),
+                    )
+                    merged += 1
+            conn.commit()
+            conn.close()
+
+        return merged
 
     # ------------------------------------------------------------------
     # Read path
@@ -520,12 +638,20 @@ class MemoryEngine:
         return top
 
     def digest(self, limit: int = 20) -> List[str]:
-        """Человекочитаемый список того, что бот реально помнит."""
+        """
+        Человекочитаемый список того, что бот реально помнит.
+
+        Если факт пришёл не от неё (пересланное сообщение, документ), источник
+        подписывается: так видно, откуда бот это взял, и легко поправить.
+        """
         items = self.get_memories(status=MemoryStatus.ACTIVE)
         items.sort(key=lambda m: (float(m.importance or 0.0), m.updated_at or ""), reverse=True)
         lines = []
         for m in items[:limit]:
-            lines.append(f"[{m.type.value}] {m.content}")
+            line = f"[{m.type.value}] {m.content}"
+            if not hygiene.is_owner_source(m.source):
+                line += f" ({hygiene.source_label(m.source)})"
+            lines.append(line)
         return lines
 
     def stats(self) -> Dict[str, Any]:
@@ -535,8 +661,10 @@ class MemoryEngine:
         by_status = {r["status"]: r["n"] for r in c.fetchall()}
         c.execute("SELECT type, COUNT(*) AS n FROM memories WHERE status = 'ACTIVE' GROUP BY type")
         by_type = {r["type"]: r["n"] for r in c.fetchall()}
+        c.execute("SELECT source, COUNT(*) AS n FROM memories WHERE status = 'ACTIVE' GROUP BY source")
+        by_source = {(r["source"] or "unknown"): r["n"] for r in c.fetchall()}
         conn.close()
-        return {"by_status": by_status, "active_by_type": by_type}
+        return {"by_status": by_status, "active_by_type": by_type, "active_by_source": by_source}
 
     # ------------------------------------------------------------------
     # Maintenance
