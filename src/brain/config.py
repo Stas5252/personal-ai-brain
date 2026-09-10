@@ -130,3 +130,28 @@ CHUNK_OVERLAP_CHARS = _env_int("CHUNK_OVERLAP_CHARS", 200, minimum=0)
 EMBEDDING_PROVIDER_TYPE = os.environ.get("EMBEDDING_PROVIDER_TYPE", "chroma_onnx")
 EMBEDDING_MODEL_NAME = os.environ.get("EMBEDDING_MODEL_NAME", "all-MiniLM-L6-v2")
 HYBRID_SEARCH_ALPHA = float(os.environ.get("HYBRID_SEARCH_ALPHA", "0.65"))
+
+
+# --- Image generation ------------------------------------------------------
+# Image generation reuses GEMINI_API_KEY. The native Generative Language
+# endpoint is derived from UPSTREAM_LLM_BASE_URL by dropping the OpenAI
+# compatibility suffix, so a reverse proxy that already makes chat reachable
+# also serves image generation without a second setting to keep in sync.
+def _derive_image_base(chat_base_url: str) -> str:
+    base = chat_base_url.rstrip("/")
+    if base.endswith("/openai"):
+        base = base[: -len("/openai")]
+    return base
+
+
+IMAGE_API_BASE_URL = os.environ.get(
+    "IMAGE_API_BASE_URL", _derive_image_base(UPSTREAM_LLM_BASE_URL)
+).rstrip("/")
+IMAGE_MODEL = os.environ.get("BRAIN_IMAGE_MODEL", "gemini-2.5-flash-image").strip()
+IMAGE_FALLBACK_MODELS = _csv_env(
+    "BRAIN_IMAGE_FALLBACK_MODELS",
+    ("gemini-2.5-flash-image", "gemini-2.0-flash-preview-image-generation"),
+)
+IMAGE_TIMEOUT_SECONDS = _env_int("BRAIN_IMAGE_TIMEOUT_SECONDS", 120)
+GENERATED_DIR = _env_path("BRAIN_GENERATED_DIR", DERIVED_DIR / "generated")
+GENERATED_DIR.mkdir(parents=True, exist_ok=True)
