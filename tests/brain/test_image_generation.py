@@ -31,9 +31,9 @@ def _png_bytes() -> bytes:
     """A real 1x1 PNG, not a string that merely claims to be one."""
     ihdr = (1).to_bytes(4, "big") + (1).to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])
     return (
-        b"\\x89PNG\\r\\n\\x1a\\n"
+        b"\x89PNG\r\n\x1a\n"
         + _chunk(b"IHDR", ihdr)
-        + _chunk(b"IDAT", zlib.compress(b"\\x00\\xff\\xff\\xff"))
+        + _chunk(b"IDAT", zlib.compress(b"\x00\xff\xff\xff"))
         + _chunk(b"IEND", b"")
     )
 
