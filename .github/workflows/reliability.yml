@@ -64,6 +64,7 @@ jobs:
             tests/brain/test_reply_safety.py \
             tests/brain/test_style_learning.py \
             tests/brain/test_telegram_reliability.py \
+            tests/brain/test_voice_loop.py \
             -k 'not live_vision_critique' \
             --junitxml=acceptance-results.xml | tee acceptance-log.txt
       - uses: actions/upload-artifact@v4

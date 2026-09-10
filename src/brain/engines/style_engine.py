@@ -12,6 +12,11 @@ Style Engine: хранилище авторских образцов, замер
     образцов нет, вместо описания несуществующего авторского голоса;
   * замеры делаются только по её собственным текстам, а не по ответам
     ассистента, если она их явно не одобрила.
+
+Кроме замеров здесь живёт обратная связь: когда она бракует ответ, из её
+фразы и из забракованного текста выводятся настоящие стоп-слова. Без этого
+кольцо обучения было разомкнуто — антипример сохранялся, но список, который
+читают промпт и бенчмарк, не менялся.
 """
 import json
 import re
@@ -35,9 +40,14 @@ MIN_EXEMPLARS_FOR_VOICE = 3
 VISUAL_TAG = "visual_style"
 # Короче этого текст не образец стиля, а реплика.
 MIN_LEARNABLE_CHARS = 40
+# Карточка личности переинжектится в каждый промпт, поэтому она короткая.
+MAX_CARD_CHARS = 700
 
 _WORD_RE = re.compile(r"\w+", re.UNICODE)
 _SENTENCE_RE = re.compile(r"[.!?]+|\n+")
+# Тот же разбор, но со знаком в конце: без него не понять, вопросом ли она
+# открывает текст.
+_SENTENCE_KEEP_RE = re.compile(r"[^.!?\n]+[.!?]*")
 _EMOJI_RE = re.compile(r"[\U00010000-\U0010ffff]")
 
 _CTA_KEYWORDS = (
@@ -60,6 +70,32 @@ _CATEGORY_MARKERS = [
     (ExemplarCategory.DESCRIPTION, ("шапка профиля", "описание профиля", " био", "bio")),
 ]
 
+# Третий слой голоса: не «какие слова», а «как объясняет». Ритм и лексику мы
+# уже мерили, а способ объяснения — нет, и именно он выдаёт чужой текст.
+_EXPLANATION_MARKERS = [
+    ("на примере", ("например", "к примеру", "смотри", "покажу", "как у ", "вот так же")),
+    ("через цифры", ("рубл", "₽", "%", " минут", " часа", " часов", " кадр", " раз")),
+    ("через чувство", ("чувств", "ощущен", "эмоц", "мурашк", "тепл", "любл", "нежн")),
+    ("через шаги", ("шаг ", "во-первых", "сначала", "потом", "дальше", "итог")),
+]
+
+# Фразы, после которых она прямо называет запрещённое слово.
+_BAN_MARKERS = (
+    "убери",
+    "уберите",
+    "без слова",
+    "без слов",
+    "не пиши слово",
+    "не используй",
+    "не употребляй",
+    "не говори",
+    "бесит слово",
+    "ненавижу слово",
+    "терпеть не могу",
+)
+_BAN_QUOTE_RE = re.compile(r"[«\"'`]([^«»\"'`]{2,40})[»\"'`]")
+_MAX_BANS_PER_MESSAGE = 5
+
 _STOPWORDS = {
     "а", "без", "более", "больше", "будет", "будто", "бы", "был", "была", "были", "было", "быть",
     "вам", "вас", "ведь", "весь", "вдруг", "вот", "впрочем", "все", "всегда", "всего", "всех",
@@ -78,6 +114,180 @@ _STOPWORDS = {
 }
 
 
+def _sentences(text: str) -> List[str]:
+    """Разбивает текст на предложения, сохраняя знак в конце."""
+    return [s.strip() for s in _SENTENCE_KEEP_RE.findall(text or "") if s.strip()]
+
+
+def classify_opening(sentence: str) -> str:
+    """Чем она открывает текст: вопросом, цифрой, короткой фразой, утверждением."""
+    body = (sentence or "").strip()
+    if not body:
+        return ""
+    words = _WORD_RE.findall(body)
+    if body.endswith("?"):
+        return "вопросом"
+    if words and words[0].isdigit():
+        return "цифрой"
+    if len(words) <= 4:
+        return "короткой фразой"
+    return "утверждением"
+
+
+def classify_closing(sentence: str) -> str:
+    """Чем она закрывает текст: вопросом, призывом, короткой точкой, мыслью."""
+    body = (sentence or "").strip()
+    if not body:
+        return ""
+    lowered = body.lower()
+    words = _WORD_RE.findall(body)
+    if body.endswith("?"):
+        return "вопросом"
+    if any(marker in lowered for marker in _CTA_KEYWORDS):
+        return "призывом"
+    if len(words) <= 4:
+        return "короткой точкой"
+    return "развёрнутой мыслью"
+
+
+def extract_explicit_bans(phrase: str) -> List[str]:
+    """Достаёт слова, которые она сама назвала запрещёнными.
+
+    «так не пиши» — это вердикт без содержания, из него ничего не выводится.
+    А «убери "дорогие мои"» — прямое указание, и оно не должно угадываться:
+    берём ровно то, что она написала в кавычках или после «убери».
+    """
+    body = (phrase or "").strip()
+    if not body:
+        return []
+    lowered = body.lower()
+    found: List[str] = []
+
+    for match in _BAN_QUOTE_RE.findall(body):
+        candidate = match.strip(" .,;:!?-–—").lower()
+        if len(candidate) >= 2:
+            found.append(candidate)
+
+    if not found:
+        for marker in _BAN_MARKERS:
+            start = lowered.find(marker)
+            while start != -1:
+                tail = body[start + len(marker):]
+                tail = tail.split(",")[0].split(".")[0].split(" и ")[0]
+                words = [w for w in tail.strip().split() if w]
+                candidate = " ".join(words[:4]).strip(" .,;:!?-–—«»\"'`").lower()
+                if len(candidate) >= 2:
+                    found.append(candidate)
+                start = lowered.find(marker, start + 1)
+
+    result: List[str] = []
+    for candidate in found:
+        if candidate in {"это", "текст", "ответ", "так"}:
+            continue
+        if "не пиши" in candidate or "не надо" in candidate:
+            continue
+        if candidate not in result:
+            result.append(candidate)
+    return result[:_MAX_BANS_PER_MESSAGE]
+
+
+def contrast_terms(
+    bad_texts: List[str], good_texts: List[str], limit: int = 3
+) -> List[str]:
+    """Выражения, которые есть в забракованном тексте и отсутствуют в её.
+
+    Пары приоритетнее одиночных слов: «дорогие мои» — безопасный запрет, а
+    «работа» запрещать нельзя, иначе бот перестанет писать по-русски. Поэтому
+    одиночное слово попадает в кандидаты только если оно длинное и в её
+    текстах не встречается ни разу.
+    """
+    def rows(texts: Optional[List[str]]) -> List[List[str]]:
+        return [[w.lower() for w in _WORD_RE.findall(t or "")] for t in (texts or []) if t]
+
+    good_words: set = set()
+    good_pairs: set = set()
+    for row in rows(good_texts):
+        good_words.update(row)
+        good_pairs.update(f"{a} {b}" for a, b in zip(row, row[1:]))
+
+    word_counts: Counter = Counter()
+    pair_counts: Counter = Counter()
+    for row in rows(bad_texts):
+        for word in row:
+            if len(word) >= 6 and word not in _STOPWORDS and not word.isdigit():
+                word_counts[word] += 1
+        for first, second in zip(row, row[1:]):
+            if len(first) < 3 or len(second) < 3:
+                continue
+            if first in _STOPWORDS and second in _STOPWORDS:
+                continue
+            pair_counts[f"{first} {second}"] += 1
+
+    result: List[str] = []
+    for pair, _ in pair_counts.most_common():
+        if len(result) >= limit:
+            return result
+        if pair in good_pairs:
+            continue
+        if all(word in good_words for word in pair.split()):
+            continue
+        result.append(pair)
+
+    for word, _ in word_counts.most_common():
+        if len(result) >= limit:
+            break
+        if word in good_words:
+            continue
+        if any(word in existing.split() for existing in result):
+            continue
+        result.append(word)
+    return result[:limit]
+
+
+def build_voice_card(profile: Any, voice: Optional[Dict[str, Any]] = None) -> str:
+    """Короткая карточка «за кого я пишу» — она уходит в каждый промпт.
+
+    Через длинный диалог базовая модель перетягивает персону на себя, и текст
+    начинает звучать нейтрально. Лечится не длинным описанием, а коротким
+    напоминанием в каждом запросе.
+    """
+    voice = voice or {}
+    identity = str(getattr(profile, "identity", "") or "").strip()
+    niche = str(getattr(profile, "niche", "") or "").strip()
+    city = str(getattr(profile, "city", "") or "").strip()
+    tone = str(getattr(profile, "tone", "") or "").strip()
+    forbidden = [
+        str(w).strip()
+        for w in (getattr(profile, "forbidden_words", None) or [])
+        if str(w).strip()
+    ]
+
+    rows = ["### ЗА КОГО Я ПИШУ (держать в каждом ответе):"]
+    who = ", ".join(part for part in (identity, niche, city) if part)
+    if who:
+        rows.append(f"- Автор: {who}.")
+    if tone:
+        rows.append(f"- Тон: {tone}.")
+    if voice.get("learned"):
+        rhythm = f"- Ритм: ~{voice.get('sentence_length_avg')} слов в предложении"
+        emoji = str(voice.get("emoji_frequency") or "").strip().lower()
+        rows.append(f"{rhythm}, {emoji}." if emoji else f"{rhythm}.")
+        habits = []
+        if voice.get("opening_habit"):
+            habits.append(f"открываю {voice['opening_habit']}")
+        if voice.get("closing_habit"):
+            habits.append(f"закрываю {voice['closing_habit']}")
+        if voice.get("explanation_habit"):
+            habits.append(f"объясняю {voice['explanation_habit']}")
+        if habits:
+            rows.append("- " + ", ".join(habits) + ".")
+    if forbidden:
+        rows.append("- Никогда: " + ", ".join(f"«{w}»" for w in forbidden[:8]) + ".")
+    if len(rows) == 1:
+        return ""
+    return "\n".join(rows)[:MAX_CARD_CHARS]
+
+
 def measure_voice(texts: List[str]) -> Dict[str, Any]:
     """Чистый замер авторского голоса по набору её текстов.
 
@@ -93,6 +303,9 @@ def measure_voice(texts: List[str]) -> Dict[str, Any]:
         "emoji_frequency": "",
         "paragraph_structure": "",
         "punctuation_habits": "",
+        "opening_habit": "",
+        "closing_habit": "",
+        "explanation_habit": "",
         "signature_words": [],
         "signature_phrases": [],
         "cta_rate": 0.0,
@@ -110,6 +323,9 @@ def measure_voice(texts: List[str]) -> Dict[str, Any]:
     word_docs: Counter = Counter()
     word_total: Counter = Counter()
     bigrams: Counter = Counter()
+    openings: Counter = Counter()
+    closings: Counter = Counter()
+    explanations: Counter = Counter()
 
     for text in clean:
         for chunk in _SENTENCE_RE.split(text):
@@ -132,6 +348,18 @@ def measure_voice(texts: List[str]) -> Dict[str, Any]:
         lowered = text.lower()
         if any(marker in lowered for marker in _CTA_KEYWORDS):
             cta_hits += 1
+
+        parts = _sentences(text)
+        if parts:
+            opening = classify_opening(parts[0])
+            closing = classify_closing(parts[-1])
+            if opening:
+                openings[opening] += 1
+            if closing:
+                closings[closing] += 1
+        for label, markers in _EXPLANATION_MARKERS:
+            if any(marker in lowered for marker in markers):
+                explanations[label] += 1
 
         meaningful = [
             w.lower()
@@ -156,6 +384,15 @@ def measure_voice(texts: List[str]) -> Dict[str, Any]:
         ranked = [word for word, total in word_total.most_common(80) if total >= 2]
     voice["signature_words"] = ranked[:12]
     voice["signature_phrases"] = [phrase for phrase, n in bigrams.most_common(40) if n >= 2][:6]
+
+    if openings:
+        voice["opening_habit"] = openings.most_common(1)[0][0]
+    if closings:
+        voice["closing_habit"] = closings.most_common(1)[0][0]
+    if explanations:
+        voice["explanation_habit"] = " и ".join(
+            label for label, _ in explanations.most_common(2)
+        )
 
     emoji_per_text = voice["emoji_per_text"]
     if emoji_per_text < 0.5:
@@ -419,6 +656,45 @@ class StyleEngine:
         voice["categories"] = categories
         return voice
 
+    def forbidden_candidates(
+        self, sample_text: Optional[str] = None, limit: int = 3
+    ) -> List[str]:
+        """Кандидаты в стоп-слова: что есть в забракованном и нет в её текстах.
+
+        Используется, когда она забраковала ответ, но не назвала слова. Тогда
+        запрет выводится контрастом, а не догадкой.
+        """
+        bad_texts: List[str] = []
+        if sample_text and sample_text.strip():
+            bad_texts.append(sample_text)
+        else:
+            bad_texts = [
+                ex.content
+                for ex in self._safe_exemplars(exemplar_type=ExemplarType.BAD_EXAMPLE, limit=5)
+            ]
+        good_texts = [
+            ex.content
+            for ex in self._safe_exemplars(exemplar_type=ExemplarType.GOOD_EXAMPLE, limit=20)
+            if VISUAL_TAG not in (ex.tags or [])
+        ]
+        if not bad_texts:
+            return []
+        return contrast_terms(bad_texts, good_texts, limit=limit)
+
+    def voice_card(
+        self, profile: Any = None, voice: Optional[Dict[str, Any]] = None
+    ) -> str:
+        """Карточка личности для переинжекта в каждый промпт."""
+        if profile is None:
+            try:
+                from src.brain.engines.profile_engine import ProfileEngine
+
+                profile = ProfileEngine().get_profile()
+            except Exception:
+                profile = None
+        voice = voice if voice is not None else self.analyze_voice()
+        return build_voice_card(profile, voice)
+
     def derive_profile(
         self, base: StyleProfile, voice: Optional[Dict[str, Any]] = None
     ) -> StyleProfile:
@@ -487,7 +763,12 @@ class StyleEngine:
         voice = self.analyze_voice()
         effective = self.derive_profile(profile, voice)
 
-        lines = [
+        lines: List[str] = []
+        card = self.voice_card(voice=voice)
+        if card:
+            lines.extend([card, ""])
+
+        lines.extend([
             "### СТИЛЬ И ТОНАЛЬНОСТЬ АВТОРА:",
             f"- Тон: {effective.tone}",
             f"- Юмор: {effective.humor}",
@@ -495,7 +776,7 @@ class StyleEngine:
             f"- Длина предложений: средняя ~{int(effective.sentence_length_avg)} слов, ритмичный слог.",
             f"- Эмодзи: {effective.emoji_frequency}.",
             f"- Пунктуация: {effective.punctuation_habits}.",
-        ]
+        ])
 
         if effective.forbidden_expressions:
             lines.append(
@@ -520,6 +801,14 @@ class StyleEngine:
                 )
             if voice["signature_phrases"]:
                 lines.append("- Её связки: " + "; ".join(voice["signature_phrases"]))
+            if voice.get("opening_habit"):
+                lines.append(f"- Начинает текст {voice['opening_habit']} — начни так же.")
+            if voice.get("closing_habit"):
+                lines.append(f"- Заканчивает {voice['closing_habit']} — закончи так же.")
+            if voice.get("explanation_habit"):
+                lines.append(
+                    f"- Объясняет {voice['explanation_habit']} — объясняй тем же способом."
+                )
             if voice["cta_rate"] >= 0.5:
                 lines.append("- Она почти всегда заканчивает призывом — сохрани его.")
             elif voice["cta_rate"] <= 0.2:
