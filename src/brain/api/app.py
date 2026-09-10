@@ -208,5 +208,7 @@ def chat(req: ChatRequest):
 app.include_router(brain_router)
 from src.brain.api.routes.openai_routes import router as openai_router
 from src.brain.api.routes.knowledge_routes import router as knowledge_router
+from src.brain.api.routes.image_routes import router as image_router
 app.include_router(openai_router)
 app.include_router(knowledge_router)
+app.include_router(image_router)
