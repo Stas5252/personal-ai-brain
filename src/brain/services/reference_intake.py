@@ -90,11 +90,11 @@ ROLE_WORDS: Dict[str, str] = {**_ROLE_BASES, **_ROLE_FORMS}
 
 # Двоеточие стоит первым специально: иначе «волосы: русые до-плеч»
 # разорвётся по дефису внутри значения.
-TRAIT_SEPARATORS: Tuple[str, ...] = (":", "\u2014", "\u2013", "=", "-")
+TRAIT_SEPARATORS: Tuple[str, ...] = (":", "—", "–", "=", "-")
 
-_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
-_KEY_TRIM = re.compile(r"^[\s\u2022*\-\u2013\u2014\d.)]+")
-_NOTE_TRIM = re.compile(r"^[\s,.;:\u2014\u2013\-]+|[\s,.;:\u2014\u2013\-]+$")
+_WORD = re.compile(r"[^\\W\\d_]+", re.UNICODE)
+_KEY_TRIM = re.compile(r"^[\\s•*\\-–—\\d.)]+")
+_NOTE_TRIM = re.compile(r"^[\\s,.;:—–\\-]+|[\\s,.;:—–\\-]+$")
 _ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 
 
@@ -121,11 +121,11 @@ def reference_note(caption: str = "") -> str:
     if not raw:
         return ""
     kept = []
-    for chunk in re.split(r"([^\W\d_]+)", raw, flags=re.UNICODE):
+    for chunk in re.split(r"([^\\W\\d_]+)", raw, flags=re.UNICODE):
         if chunk and _fold(chunk) in ROLE_WORDS:
             continue
         kept.append(chunk)
-    note = re.sub(r"\s+", " ", "".join(kept)).strip()
+    note = re.sub(r"\\s+", " ", "".join(kept)).strip()
     return _NOTE_TRIM.sub("", note).strip()
 
 
@@ -163,7 +163,7 @@ def parse_traits(text: str = "") -> Tuple[Dict[str, str], List[str]]:
     """Возвращает принятые поля и чужие ключи — молча ничего не теряется."""
     accepted: Dict[str, str] = {}
     unknown: List[str] = []
-    for line in re.split(r"[\n;]+", str(text or "")):
+    for line in re.split(r"[\\n;]+", str(text or "")):
         pair = _split_pair(line)
         if not pair:
             continue
