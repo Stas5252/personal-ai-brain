@@ -17,11 +17,65 @@ from typing import Any, Optional
 
 API_ROOT = "https://api.telegram.org"
 CAPTION_LIMIT = 1024
+MESSAGE_LIMIT = 4096
+SAFE_CHUNK = 3500
 
 
 def api_base(token: str) -> str:
     """Returns the Bot API base URL for a token."""
     return f"{API_ROOT}/bot{token}"
+
+
+def split_message(text: str, limit: int = SAFE_CHUNK) -> list[str]:
+    """Splits a long answer into Telegram-sized parts.
+
+    Telegram rejects anything over 4096 characters with HTTP 400, and a price
+    list or a nine-step stories arc easily crosses that line, so the reply has
+    to be cut before it is sent. Cuts are made on a blank line, then a line
+    break, then a space — a hard cut is the last resort.
+    """
+    body = (text or "").strip()
+    if not body:
+        return []
+    if len(body) <= limit:
+        return [body]
+
+    chunks: list[str] = []
+    rest = body
+    floor = max(1, limit // 3)
+    while len(rest) > limit:
+        window = rest[:limit]
+        cut = window.rfind("\n\n")
+        if cut < floor:
+            cut = window.rfind("\n")
+        if cut < floor:
+            cut = window.rfind(" ")
+        if cut < floor:
+            cut = limit
+        piece = rest[:cut].strip()
+        if piece:
+            chunks.append(piece)
+        rest = rest[cut:].strip()
+    if rest:
+        chunks.append(rest)
+    return chunks
+
+
+def sanitize_markdown(text: str) -> str:
+    """Repairs Markdown that Telegram would refuse to parse.
+
+    A single unbalanced asterisk or underscore makes the Bot API answer
+    "can't parse entities" and the user sees nothing at all. Losing one
+    emphasis marker is always better than losing the whole message.
+    """
+    body = text or ""
+    if body.count("```") % 2:
+        body = f"{body}\n```"
+    markers = ("*", "_") if "```" in body else ("*", "_", "`")
+    for marker in markers:
+        if body.count(marker) % 2:
+            body = body.replace(marker, "")
+    return body
 
 
 class TelegramMedia:
@@ -60,6 +114,34 @@ class TelegramMedia:
     def typing(self, chat_id: Any, action: str = "typing") -> "TypingSession":
         """Context manager that keeps the status alive for the whole task."""
         return TypingSession(self, chat_id, action)
+
+    def send_text(
+        self,
+        chat_id: Any,
+        text: str,
+        parse_mode: Optional[str] = "Markdown",
+        reply_markup: Optional[dict[str, Any]] = None,
+    ) -> bool:
+        """Sends an answer of any length, retrying once without Markdown."""
+        if not self.is_configured() or chat_id is None:
+            return False
+        chunks = split_message(text)
+        if not chunks:
+            return False
+        delivered = True
+        for index, chunk in enumerate(chunks):
+            payload: dict[str, Any] = {"chat_id": chat_id, "text": sanitize_markdown(chunk)}
+            if parse_mode:
+                payload["parse_mode"] = parse_mode
+            if reply_markup is not None and index == len(chunks) - 1:
+                payload["reply_markup"] = reply_markup
+            if self._post_json("sendMessage", payload):
+                continue
+            payload.pop("parse_mode", None)
+            payload["text"] = chunk
+            if not self._post_json("sendMessage", payload):
+                delivered = False
+        return delivered
 
     def send_photo(
         self,
