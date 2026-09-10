@@ -3,6 +3,7 @@ Hierarchical Knowledge Engine with 6 Layers, Metadata, and Source Traceability.
 """
 import uuid
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple, Dict, Any
@@ -10,6 +11,22 @@ from src.brain.db import get_connection
 from src.brain.models.knowledge import (
     KnowledgeLayer, KnowledgeMetadata, KnowledgeChunk, SourceTrace, HallucinationType
 )
+
+logger = logging.getLogger(__name__)
+
+# Chunks can land in SQLite and still be missing from the vector index. That
+# used to happen in total silence, so the knowledge base looked healthy while
+# semantic search quietly degraded to keyword matching.
+_VECTOR_SYNC_FAILURES = 0
+
+# Below this a match is noise rather than an answer.
+MIN_LEXICAL_SCORE = 0.15
+
+
+def vector_sync_failures() -> int:
+    """How many sources failed to reach the vector index in this process."""
+    return _VECTOR_SYNC_FAILURES
+
 
 class KnowledgeEngine:
     def __init__(self):
@@ -104,7 +121,15 @@ class KnowledgeEngine:
             v_index = ChromaVectorIndex(embedding_provider=get_embedding_provider())
             v_index.upsert_chunks(chunks)
         except Exception:
-            pass
+            # Not fatal: the chunks are already in SQLite and FTS5, so lexical
+            # retrieval still finds them. But it must never be silent again.
+            global _VECTOR_SYNC_FAILURES
+            _VECTOR_SYNC_FAILURES += 1
+            logger.warning(
+                "Vector index sync failed for source %s (%r); %d chunk(s) are searchable "
+                "through SQLite/FTS5 only. Semantic search is degraded until this is fixed.",
+                source_id, title, len(chunks), exc_info=True,
+            )
 
         return meta, chunks
 
@@ -118,20 +143,30 @@ class KnowledgeEngine:
     ) -> List[Tuple[KnowledgeChunk, float, SourceTrace]]:
         """
         Executes hybrid vector + lexical search across all 6 layers.
-        Falls back to lexical matching if vector store is uninitialized.
+        Falls back to lexical matching if the vector store is uninitialized or
+        returns nothing, so a broken index degrades the answer instead of
+        emptying it.
         """
+        from src.brain.knowledge.text_match import lexical_score, query_topic, topic_bonus
+
         try:
             from src.brain.knowledge.indexing.hybrid_search import HybridSearchEngine
             engine = HybridSearchEngine()
-            return engine.search(
+            hybrid_results = engine.search(
                 query=query,
                 layer=layer,
                 project_id=project,
                 client_id=client,
                 top_k=limit
             )
+            if hybrid_results:
+                return hybrid_results
+            logger.info("Hybrid search returned nothing for %r; retrying lexically.", query)
         except Exception:
-            pass
+            logger.warning(
+                "Hybrid search unavailable for %r; falling back to the lexical scan.",
+                query, exc_info=True,
+            )
 
         # Robust lexical fallback
         conn = get_connection()
@@ -148,24 +183,32 @@ class KnowledgeEngine:
         
         if not rows:
             return []
-            
-        query_words = set(re.findall(r"\w+", query.lower()))
+
+        # The question is routed into the same nine topics the course corpus is
+        # indexed under, so a pricing question prefers pricing lessons.
+        topic = query_topic(query)
         scored_chunks = []
         
         for r in rows:
-            meta = KnowledgeMetadata(**json.loads(r["metadata_json"]))
+            try:
+                meta = KnowledgeMetadata(**json.loads(r["metadata_json"]))
+            except Exception:
+                # One unreadable row must not empty the whole answer.
+                logger.warning("Skipping chunk %s: unreadable metadata.", r["id"], exc_info=True)
+                continue
+
             if project and meta.project and meta.project != project:
                 continue
             if client and meta.client and meta.client != client:
                 continue
-                
-            chunk_words = set(re.findall(r"\w+", r["content"].lower()))
-            common = query_words.intersection(chunk_words)
-            score = len(common) / max(len(query_words), 1) if common else 0.0
-            if query.lower() in r["content"].lower():
-                score = max(score, 0.95)
-                
-            if score > 0.15:
+
+            score = lexical_score(query, r["content"])
+            if score > 0.0:
+                # Topic agreement only strengthens a chunk that already matched;
+                # it can never pull in an unrelated one.
+                score = min(1.0, score + topic_bonus(topic, meta.subcategory))
+
+            if score > MIN_LEXICAL_SCORE:
                 chunk = KnowledgeChunk(
                     id=r["id"],
                     source_id=r["source_id"],
