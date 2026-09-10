@@ -1,4 +1,4 @@
-"""Single-owner API with bounded uploads and explicit media failures."""
+"""Single-owner API with bounded uploads, rate limiting and explicit media failures."""
 import hashlib
 import base64
 import logging
@@ -7,14 +7,48 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
+from src.brain.api.ratelimit import RateLimiter, client_key
 from src.brain.api.security import verify_brain_api_key
-from src.brain.config import DATA_DIR, MAX_FILE_SIZE_BYTES, ALLOWED_EXTENSIONS, GEMINI_API_KEY
+from src.brain.config import (
+    ALLOWED_EXTENSIONS,
+    DATA_DIR,
+    GEMINI_API_KEY,
+    MAX_FILE_SIZE_BYTES,
+    RATE_LIMIT_ENABLED,
+    RATE_LIMIT_REQUESTS,
+    RATE_LIMIT_WINDOW_SECONDS,
+)
 from src.brain.channels.runtime_state import confined_file, process_request
 
 log = logging.getLogger(__name__)
-app = FastAPI(title='Personal AI Brain', version='2.1.0', docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title='Personal AI Brain', version='2.2.0', docs_url=None, redoc_url=None, openapi_url=None)
 UPLOAD_ROOT = DATA_DIR / 'uploads'
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+
+# Health endpoints are exempt: the container healthcheck polls them on a timer
+# and must never be throttled into reporting a false failure.
+RATE_LIMIT_EXEMPT_PATHS = {'/health', '/health/ready', '/health/live'}
+_limiter = RateLimiter(capacity=RATE_LIMIT_REQUESTS, window_seconds=RATE_LIMIT_WINDOW_SECONDS)
+
+
+@app.middleware('http')
+async def limit_rate(request: Request, call_next):
+    """Reject floods before any authentication or model work happens."""
+    if RATE_LIMIT_ENABLED and request.url.path not in RATE_LIMIT_EXEMPT_PATHS:
+        key = client_key(
+            request.headers.get('authorization'),
+            request.headers.get('x-brain-api-key'),
+            request.client.host if request.client else None,
+        )
+        allowed, retry_after = _limiter.check(key)
+        if not allowed:
+            log.warning('Rate limit exceeded for %s on %s', key, request.url.path)
+            return JSONResponse(
+                {'detail': 'Too many requests. Slow down and retry shortly.'},
+                status_code=429,
+                headers={'Retry-After': str(retry_after)},
+            )
+    return await call_next(request)
 
 
 @app.middleware('http')
@@ -52,6 +86,34 @@ def ready():
                              'model_live_check': 'not_run'}, status_code=200 if storage else 503)
     except Exception:
         return JSONResponse({'status': 'degraded', 'database': False}, status_code=503)
+
+
+@app.get('/health/knowledge')
+def knowledge_status():
+    """Report how much of the course corpus is actually indexed.
+
+    This exists so "the knowledge base works" is a verifiable claim rather than
+    a statement in a README.
+    """
+    from src.brain.config import CORPUS_DIR
+    from src.brain.knowledge.corpus import CorpusLedger, iter_corpus_files
+    try:
+        ledger = CorpusLedger(DATA_DIR / '.corpus_ledger.json')
+        on_disk = len(list(iter_corpus_files(CORPUS_DIR)))
+        counts = ledger.counts()
+        settled = counts.get('indexed', 0) + counts.get('duplicate', 0)
+        return {
+            'corpus_files_on_disk': on_disk,
+            'corpus_files_settled': settled,
+            'statuses': counts,
+            'topics': ledger.topic_counts(),
+            'chunks': ledger.total_chunks(),
+            'failures': [{'name': e.name, 'error': e.error} for e in ledger.failures()],
+            'complete': bool(on_disk) and settled >= on_disk,
+        }
+    except Exception:
+        log.exception('Knowledge status unavailable')
+        raise HTTPException(503, 'Knowledge status unavailable.')
 
 
 @app.get('/', response_class=HTMLResponse)

@@ -13,6 +13,14 @@ x-brain-common: &brain-common
     UPSTREAM_LLM_BASE_URL: ${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
     EMBEDDING_PROVIDER_TYPE: ${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
     MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
+    # Repository-local course corpus. Its ceiling is separate from the upload
+    # ceiling above because six shipped lesson PDFs exceed 20 MB.
+    BRAIN_CORPUS_DIR: /app/материалы для ии
+    CORPUS_MAX_FILE_SIZE_BYTES: ${CORPUS_MAX_FILE_SIZE_BYTES:-67108864}
+    BRAIN_INGEST_CORPUS: ${BRAIN_INGEST_CORPUS:-true}
+    BRAIN_RATE_LIMIT_ENABLED: ${BRAIN_RATE_LIMIT_ENABLED:-true}
+    BRAIN_RATE_LIMIT_REQUESTS: ${BRAIN_RATE_LIMIT_REQUESTS:-120}
+    BRAIN_RATE_LIMIT_WINDOW_SECONDS: ${BRAIN_RATE_LIMIT_WINDOW_SECONDS:-60}
     BRAIN_DATA_DIR: /app/data
     BRAIN_DB_PATH: /app/data/brain.db
     VECTOR_DB_DIR: /app/data/vector_db
@@ -43,6 +51,9 @@ services:
     environment:
       <<: *brain-environment
       BRAIN_SERVICE: telegram
+      # Only the API container ingests the corpus; two writers would race on
+      # the same SQLite database and Chroma directory.
+      BRAIN_INGEST_CORPUS: "false"
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:?Set TELEGRAM_OWNER_ID in .env}
     depends_on:

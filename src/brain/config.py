@@ -33,6 +33,13 @@ def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
     return value
 
 
+def _env_bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw.strip() == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _csv_env(name: str, defaults: Iterable[str]) -> list[str]:
     raw = os.environ.get(name, "")
     values = [item.strip() for item in raw.split(",") if item.strip()]
@@ -76,6 +83,13 @@ BUDGET_QUOTAS = {
 
 BRAIN_API_KEY = os.environ.get("BRAIN_API_KEY", "").strip()
 
+# Request ceiling for the API. This is a single-owner service, so the limit
+# exists to bound damage from a leaked key or a runaway retry loop rather than
+# to shape traffic between tenants.
+RATE_LIMIT_ENABLED = _env_bool("BRAIN_RATE_LIMIT_ENABLED", True)
+RATE_LIMIT_REQUESTS = _env_int("BRAIN_RATE_LIMIT_REQUESTS", 120)
+RATE_LIMIT_WINDOW_SECONDS = _env_int("BRAIN_RATE_LIMIT_WINDOW_SECONDS", 60)
+
 STORAGE_DIR = _env_path("BRAIN_STORAGE_DIR", DATA_DIR / "storage")
 ORIGINALS_DIR = _env_path("BRAIN_ORIGINALS_DIR", STORAGE_DIR / "originals")
 DERIVED_DIR = _env_path("BRAIN_DERIVED_DIR", STORAGE_DIR / "derived")
@@ -86,6 +100,15 @@ for _directory in (STORAGE_DIR, ORIGINALS_DIR, DERIVED_DIR, VECTOR_DB_DIR):
     _directory.mkdir(parents=True, exist_ok=True)
 
 MAX_FILE_SIZE_BYTES = _env_int("MAX_FILE_SIZE_BYTES", 20 * 1024 * 1024)
+
+# The course corpus shipped in the repository is trusted, version-controlled
+# content, so it gets its own, higher ceiling. MAX_FILE_SIZE_BYTES stays small
+# because it guards an internet-facing upload endpoint; six of the shipped
+# course PDFs are larger than 20 MB and were rejected outright before this
+# split existed, which is why none of them were ever in the knowledge base.
+CORPUS_DIR = _env_path("BRAIN_CORPUS_DIR", BASE_DIR / "материалы для ии")
+CORPUS_MAX_FILE_SIZE_BYTES = _env_int("CORPUS_MAX_FILE_SIZE_BYTES", 64 * 1024 * 1024)
+
 ALLOWED_DOCUMENT_EXTENSIONS = {".pdf", ".docx", ".pptx", ".xlsx", ".txt", ".md", ".html"}
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".tiff", ".tif"}
 ALLOWED_AUDIO_EXTENSIONS = {".mp3", ".wav", ".m4a", ".ogg", ".flac"}
