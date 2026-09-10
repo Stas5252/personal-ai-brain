@@ -13,6 +13,11 @@ The bot also learns the owner's own voice: /учись stores her texts, «пи�
 an anti-example. StyleEngine measures those samples and every prompt is built
 from the measurements, so the voice is learned instead of imagined.
 
+A rejection also changes what the bot may write: the words she names go into
+profile.forbidden_words, and when she names none they are derived by contrast
+with her own texts. That list is what the prompt and the benchmark read, so
+without this step «так не пиши» changed nothing but the archive.
+
 Slow work — a guided action, a generated photo, onboarding extraction, a
 free-form answer — is handed to one FIFO worker thread. Generating a photo
 takes up to two minutes, and while that ran inside the polling loop no new
@@ -31,11 +36,15 @@ from src.brain.channels.runtime_state import owner_allowed
 from src.brain.channels.task_queue import SerialWorker
 from src.brain.channels.telegram_media import CAPTION_LIMIT, TelegramMedia, sanitize_markdown, split_message
 from src.brain.channels.telegram_ratelimit import limiter
-from src.brain.engines.style_engine import MIN_EXEMPLARS_FOR_VOICE, StyleEngine
+from src.brain.engines.style_engine import MIN_EXEMPLARS_FOR_VOICE, StyleEngine, extract_explicit_bans
 from src.brain.models.style import ExemplarType
 from src.brain.services.guided_actions import ACTION_BY_LABEL, IMAGE_ACTIONS, GuidedActionService, MissingActionInput, capability_markdown
 
 HISTORY_TURNS = 6
+
+# Дальше этого числа стоп-лист начинает вытеснять из промпта её собственный
+# голос, поэтому список ограничен.
+MAX_FORBIDDEN_WORDS = 40
 
 INTRO_REQUEST = (
     "Привет! Я твой рабочий ИИ-напарник по фотобизнесу.\n\n"
@@ -156,6 +165,11 @@ class GuidedBot(legacy.Bot):
         """A profile counts as known only with a name and a niche in it."""
         identity=str(getattr(profile,"identity","") or "").strip(); niche=str(getattr(profile,"niche","") or "").strip()
         return bool(identity and niche)
+
+    @staticmethod
+    def _forbidden(profile):
+        """Current stop list, cleaned of empty entries."""
+        return [str(w).strip() for w in (getattr(profile,"forbidden_words",None) or []) if str(w).strip()]
 
     @staticmethod
     def _profile_card(profile):
@@ -295,6 +309,76 @@ class GuidedBot(legacy.Bot):
                 memory_type=MemoryType.PREFERENCE,importance=0.9 if positive else 0.95,force=True)
         except Exception: pass
 
+    def _save_forbidden(self,profile,current,added):
+        """Writes the stop list back to the profile; returns what was stored."""
+        try:
+            profile.forbidden_words=(current+added)[:MAX_FORBIDDEN_WORDS]
+            self.brain.profile_engine.save_profile(profile)
+        except Exception: return []
+        return added
+
+    def _ban_words(self,phrase,sample):
+        """Turns a rejection into real stop words in the profile.
+
+        An anti-example alone changed nothing: the prompt and the benchmark
+        read profile.forbidden_words, and that list stayed empty, so the same
+        cliche came back. Words she named herself win; otherwise they are
+        derived by contrast with her own texts and never guessed.
+        """
+        profile=self._profile()
+        if profile is None: return []
+        try: words=extract_explicit_bans(phrase)
+        except Exception: words=[]
+        if not words:
+            try: words=self.style.forbidden_candidates(sample_text=sample,limit=2)
+            except Exception: words=[]
+        if not words: return []
+        current=self._forbidden(profile); lowered={w.lower() for w in current}
+        added=[w for w in words if w and w.lower() not in lowered]
+        if not added: return []
+        return self._save_forbidden(profile,current,added)
+
+    def _unban(self,phrase):
+        """Lifts a ban, so a wrong stop word is not permanent."""
+        needle=(phrase or "").strip().lower()
+        if len(needle)<3: return []
+        profile=self._profile()
+        if profile is None: return []
+        current=self._forbidden(profile)
+        kept=[w for w in current if needle not in w.lower() and w.lower() not in needle]
+        removed=[w for w in current if w not in kept]
+        if not removed: return []
+        try:
+            profile.forbidden_words=kept
+            self.brain.profile_engine.save_profile(profile)
+        except Exception: return []
+        return removed
+
+    def _stopwords(self,text):
+        """/стопслова: показывает и пополняет список запрещённых слов."""
+        argument=text.split(" ",1)[1].strip() if " " in text else ""
+        profile=self._profile()
+        if profile is None: return "Профиль недоступен: база не отвечает."
+        current=self._forbidden(profile)
+        if not argument:
+            if not current:
+                return ("🚫 Стоп-слов пока нет.\n\n"
+                        "Добавить: /стопслова дорогие мои, волшебство момента\n"
+                        "Или ответь «так не пиши» на плохой ответ — слова выведу сам и назову их.")
+            return ("🚫 Никогда не употребляю:\n"+"\n".join(f"• {w}" for w in current)+
+                    "\n\nДобавить: /стопслова <слова через запятую>. Снять запрет: /забудь <слово>")
+        fresh=[]
+        for part in argument.replace(";",",").split(","):
+            candidate=part.strip(" .,;:!?«»\"'").lower()
+            if len(candidate)>=2 and candidate not in fresh: fresh.append(candidate)
+        lowered={w.lower() for w in current}
+        added=[w for w in fresh if w not in lowered]
+        if not added: return "Эти слова уже в стоп-листе."
+        stored=self._save_forbidden(profile,current,added)
+        if not stored: return "Не смог сохранить стоп-слова: база не отвечает."
+        return ("🚫 Добавил в стоп-лист: "+", ".join(f"«{w}»" for w in stored)+
+                ".\nБольше не употреблю, а если слово проскочит — перепишу ответ до отправки.")
+
     def _learn_style(self,text,exemplar_type=ExemplarType.GOOD_EXAMPLE):
         """Stores one of her texts as a sample and reports what was measured."""
         try: saved=self.style.learn_from_text(text,exemplar_type=exemplar_type)
@@ -307,9 +391,15 @@ class GuidedBot(legacy.Bot):
         except Exception: voice={}
         head=f"Запомнил твой {label}: «{saved.title}»."
         if voice.get("learned"):
-            return (head+f"\n\nВсего образцов: {voice['exemplar_count']}. Твой голос замерен: "
-                    f"предложения ~{voice['sentence_length_avg']} слов, {voice['emoji_frequency'].lower()}, "
-                    f"{voice['punctuation_habits']}. Пишу по этим меркам.")
+            body=(head+f"\n\nВсего образцов: {voice['exemplar_count']}. Твой голос замерен: "
+                  f"предложения ~{voice['sentence_length_avg']} слов, {voice['emoji_frequency'].lower()}, "
+                  f"{voice['punctuation_habits']}.")
+            habits=[]
+            if voice.get("opening_habit"): habits.append(f"начинаешь {voice['opening_habit']}")
+            if voice.get("closing_habit"): habits.append(f"заканчиваешь {voice['closing_habit']}")
+            if voice.get("explanation_habit"): habits.append(f"объясняешь {voice['explanation_habit']}")
+            if habits: body+=" Ещё вижу: "+", ".join(habits)+"."
+            return body+" Пишу по этим меркам."
         left=max(0,MIN_EXEMPLARS_FOR_VOICE-int(voice.get("exemplar_count") or 0))
         return head+f"\n\nНужно ещё {left} — и я перестану писать «вообще» и начну писать тобой."
 
@@ -334,7 +424,13 @@ class GuidedBot(legacy.Bot):
         sample=self._reply_text(message) or self._last_answer()
         if not sample: return "Не вижу, о каком тексте речь — ответь этой фразой на нужное сообщение."
         self._remember_preference(text,approved)
-        return self._learn_style(sample,ExemplarType.GOOD_EXAMPLE if approved else ExemplarType.BAD_EXAMPLE)
+        verdict=self._learn_style(sample,ExemplarType.GOOD_EXAMPLE if approved else ExemplarType.BAD_EXAMPLE)
+        if not approved:
+            added=self._ban_words(text,sample)
+            if added:
+                verdict+=("\n\nВ стоп-лист: "+", ".join(f"«{w}»" for w in added)+
+                          " — больше не употреблю. Если промахнулся: /забудь <слово>.")
+        return verdict
 
     def _style_card(self):
         """/стиль: честный отчёт о том, чему бот научился на её текстах."""
@@ -345,9 +441,13 @@ class GuidedBot(legacy.Bot):
         good=int(by_type.get("GOOD_EXAMPLE") or 0); bad=int(by_type.get("BAD_EXAMPLE") or 0)
         profile=self._profile()
         visual=str(getattr(profile,"visual_preferences","") or "").strip()
+        forbidden=self._forbidden(profile) if profile is not None else []
+        stop_row=("🚫 Стоп-слова ("+str(len(forbidden))+"): "+", ".join(forbidden[:10])
+                  if forbidden else "🚫 Стоп-слов нет — забракуй ответ фразой «так не пиши», и я их назову сам")
         if not summary.get("total"):
             return ("🎨 Я ещё не видел ни одного твоего текста, поэтому пишу нейтрально и твой голос не выдумываю.\n\n"
                     "Пришли 3 своих текста: /учись <текст> — или отправь текст и ответь на него «пиши так же».\n"
+                    f"{stop_row}\n"
                     f"📷 Визуальный стиль для фото: {visual or 'не задан — /фотостиль <описание>'}")
         rows=["🎨 Чему я научился на твоих текстах",""]
         cats=", ".join(f"{CATEGORY_LABELS.get(k,k)}: {v}" for k,v in (summary.get("by_category") or {}).items())
@@ -358,6 +458,9 @@ class GuidedBot(legacy.Bot):
                    f"• Предложения: ~{voice.get('sentence_length_avg')} слов",
                    f"• Эмодзи: {voice.get('emoji_frequency')}",
                    f"• Пунктуация: {voice.get('punctuation_habits')}"]
+            if voice.get("opening_habit"): rows.append(f"• Начинаешь текст {voice['opening_habit']}")
+            if voice.get("closing_habit"): rows.append(f"• Заканчиваешь {voice['closing_habit']}")
+            if voice.get("explanation_habit"): rows.append(f"• Объясняешь {voice['explanation_habit']}")
             if voice.get("signature_words"): rows.append("• Твои слова: "+", ".join(voice["signature_words"][:8]))
             if voice.get("signature_phrases"): rows.append("• Твои связки: "+"; ".join(voice["signature_phrases"][:4]))
             rate=float(voice.get("cta_rate") or 0.0)
@@ -366,7 +469,8 @@ class GuidedBot(legacy.Bot):
         else:
             left=max(0,MIN_EXEMPLARS_FOR_VOICE-int(voice.get("exemplar_count") or 0))
             rows+=["",f"Голос ещё не выучен: нужно ещё {left} текст(а)."]
-        rows+=["",f"📷 Визуальный стиль для фото: {visual or 'не задан — /фотостиль <описание>'}",
+        rows+=["",stop_row,
+               f"📷 Визуальный стиль для фото: {visual or 'не задан — /фотостиль <описание>'}",
                "","Добавить образец: /учись <текст>. Забраковать ответ: ответь на него «так не пиши»."]
         return "\n".join(rows)
 
@@ -460,10 +564,14 @@ class GuidedBot(legacy.Bot):
         except Exception as exc: return f"Не смог почистить память: {exc}"
         try: dropped=self.style.forget_exemplars(phrase)
         except Exception: dropped=0
-        if not removed and not dropped: return "Ничего похожего ни в памяти, ни в образцах стиля нет."
+        try: unbanned=self._unban(phrase)
+        except Exception: unbanned=[]
+        if not removed and not dropped and not unbanned:
+            return "Ничего похожего ни в памяти, ни в образцах стиля, ни в стоп-листе нет."
         parts=[]
         if removed: parts.append(f"записей памяти: {removed}")
         if dropped: parts.append(f"образцов стиля: {dropped}")
+        if unbanned: parts.append("снял запрет: "+", ".join(f"«{w}»" for w in unbanned))
         return "Удалил — "+", ".join(parts)+"."
 
     # -- entry point --------------------------------------------------------
@@ -485,6 +593,7 @@ class GuidedBot(legacy.Bot):
                 self.state.put(self._learn_key(),"1"); return self._say(chat,LEARN_REQUEST)
             return self._say(chat,self._learn_style(sample))
         if text.startswith("/фотостиль") or text.startswith("/photostyle"): return self._say(chat,self._photo_style(text))
+        if text.startswith("/стопслова") or text.startswith("/stopwords"): return self._say(chat,self._stopwords(text))
         if text.startswith("/забудь") or text.startswith("/forget"): return self._say(chat,self._forget(text))
         if text=="/cancel" and (pending or self.state.get(self._learn_key())):
             self.state.put(self._key(),None); self.state.put(self._learn_key(),None); return self._say(chat,"Остановил.")
