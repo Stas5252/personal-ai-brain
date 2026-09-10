@@ -12,6 +12,12 @@ The bot also learns the owner's own voice: /учись stores her texts, «пи�
 же» turns the last answer into a good example and «так не пиши» stores it as
 an anti-example. StyleEngine measures those samples and every prompt is built
 from the measurements, so the voice is learned instead of imagined.
+
+Slow work — a guided action, a generated photo, onboarding extraction, a
+free-form answer — is handed to one FIFO worker thread. Generating a photo
+takes up to two minutes, and while that ran inside the polling loop no new
+messages were read at all: the bot looked dead. With chat=None everything
+stays synchronous, so the adapter keeps getting the answer as a return value.
 """
 from __future__ import annotations
 
@@ -22,7 +28,9 @@ from pathlib import Path
 
 import src.brain.channels.telegram_runner as legacy
 from src.brain.channels.runtime_state import owner_allowed
+from src.brain.channels.task_queue import SerialWorker
 from src.brain.channels.telegram_media import CAPTION_LIMIT, TelegramMedia, sanitize_markdown, split_message
+from src.brain.channels.telegram_ratelimit import limiter
 from src.brain.engines.style_engine import MIN_EXEMPLARS_FOR_VOICE, StyleEngine
 from src.brain.models.style import ExemplarType
 from src.brain.services.guided_actions import ACTION_BY_LABEL, IMAGE_ACTIONS, GuidedActionService, MissingActionInput, capability_markdown
@@ -60,6 +68,8 @@ LEARN_REQUEST = (
     "Отмена — /cancel."
 )
 
+BUSY_NOTE = "Секунду, доделываю предыдущую задачу — отвечу сразу после неё."
+
 APPROVE_MARKERS = ("вот так пиши", "так пиши", "пиши так же", "сохрани этот стиль", "запомни этот стиль", "запомни стиль")
 REJECT_MARKERS = ("так не пиши", "так больше не пиши", "никогда так не пиши", "убери этот стиль")
 
@@ -75,7 +85,7 @@ CATEGORY_LABELS = {
 
 class GuidedBot(legacy.Bot):
     def __init__(self, api, brain, state, owner):
-        super().__init__(api, brain, state, owner); self.guided=GuidedActionService(); self.media=TelegramMedia(); self.style=StyleEngine()
+        super().__init__(api, brain, state, owner); self.guided=GuidedActionService(); self.media=TelegramMedia(); self.style=StyleEngine(); self.worker=SerialWorker(name="tg-guided")
 
     def _key(self): return f"guided_action:{self.owner}"
 
@@ -93,6 +103,27 @@ class GuidedBot(legacy.Bot):
     def _status(action_id):
         return "upload_photo" if action_id in IMAGE_ACTIONS else "typing"
 
+    # -- background work ----------------------------------------------------
+    def _guard(self,chat,job,*args):
+        """Runs one job and delivers its answer, converting failures to text.
+
+        Without a chat the answer is returned instead of sent, so the adapter
+        and the tests keep the synchronous contract they already rely on.
+        """
+        try: answer=job(*args)
+        except (MissingActionInput,ValueError) as exc: answer=str(exc)
+        except Exception as exc: answer=f"Не смог обработать запрос: {exc}"
+        if chat is None: return answer
+        if answer: self._say(chat,answer)
+        return None
+
+    def _defer(self,chat,job,*args):
+        """Hands slow work to the worker so the polling loop keeps reading."""
+        if chat is None: return self._guard(None,job,*args)
+        if self.worker.pending(): self.media.send_text(chat,BUSY_NOTE)
+        self.worker.submit(self._guard,chat,job,*args)
+        return None
+
     # -- delivery -----------------------------------------------------------
     def _say(self,chat,text,keyboard=True):
         """Delivers an answer of any length and returns None.
@@ -108,10 +139,10 @@ class GuidedBot(legacy.Bot):
             payload=sanitize_markdown(chunk); last=index==len(chunks)-1
             if last and keyboard:
                 try:
-                    self.api.send(chat,payload,keyboard=self._current_keyboard()); continue
+                    limiter().acquire(chat); self.api.send(chat,payload,keyboard=self._current_keyboard()); continue
                 except Exception: pass
             if not self.media.send_text(chat,payload):
-                try: self.api.send(chat,payload)
+                try: limiter().acquire(chat); self.api.send(chat,payload)
                 except Exception: pass
         return None
 
@@ -238,6 +269,16 @@ class GuidedBot(legacy.Bot):
         finally:
             for item in temp: Path(item).unlink(missing_ok=True)
 
+    def _run_action(self,action_id,chat):
+        """Runs an action that needs no input from her (photo generation included)."""
+        with self.media.typing(chat,self._status(action_id)):
+            result=self.guided.execute(action_id,self.brain,use_llm=True)
+        return self._deliver(chat,result)
+
+    def _legacy_command(self,message):
+        answer=legacy.Bot.reply(self,message)
+        return answer if isinstance(answer,str) else None
+
     # -- style learning -----------------------------------------------------
     @staticmethod
     def _reply_text(message):
@@ -271,6 +312,17 @@ class GuidedBot(legacy.Bot):
                     f"{voice['punctuation_habits']}. Пишу по этим меркам.")
         left=max(0,MIN_EXEMPLARS_FOR_VOICE-int(voice.get("exemplar_count") or 0))
         return head+f"\n\nНужно ещё {left} — и я перестану писать «вообще» и начну писать тобой."
+
+    def _learn_from_message(self,message):
+        """Turns the next message — text or voice — into a style sample."""
+        temp=[]
+        try:
+            try: body,_=self._collect(message,temp)
+            except ValueError as exc: return str(exc)
+        finally:
+            for item in temp: Path(item).unlink(missing_ok=True)
+        self.state.put(self._learn_key(),None)
+        return self._learn_style(body)
 
     def _style_feedback(self,message,text):
         """«пиши так же» / «так не пиши» превращают ответ в эталон или антипример."""
@@ -378,6 +430,17 @@ class GuidedBot(legacy.Bot):
         finally:
             for item in temp: Path(item).unlink(missing_ok=True)
 
+    def _intro_or_answer(self,message,chat):
+        """Onboarding first, otherwise a normal answer — decided in one place."""
+        if self.state.get(self._intro_key()):
+            learned=self._learn_about_owner(message,chat)
+            if learned is not None: return learned
+        else:
+            profile=self._profile()
+            if profile is not None and not self._known(profile):
+                self.state.put(self._intro_key(),"1"); self._say(chat,INTRO_REQUEST,keyboard=False)
+        return self._freeform(message,chat)
+
     # -- memory commands ----------------------------------------------------
     def _memory_digest(self):
         try:
@@ -426,39 +489,21 @@ class GuidedBot(legacy.Bot):
         if text=="/cancel" and (pending or self.state.get(self._learn_key())):
             self.state.put(self._key(),None); self.state.put(self._learn_key(),None); return self._say(chat,"Остановил.")
         if text.startswith("/"):
-            answer=super().reply(message)
-            return self._say(chat,answer) if isinstance(answer,str) else answer
+            return self._defer(chat,self._legacy_command,message)
         if text in ACTION_BY_LABEL:
             self.state.put(self._learn_key(),None)
             action=ACTION_BY_LABEL[text]; start=self.guided.start(action.action_id)
             if start["requires_input"]:
                 self.state.put(self._key(),action.action_id)
                 return self._say(chat,f"🧭 {action.label}\n\n{start['prompt']}")
-            with self.media.typing(chat,self._status(action.action_id)):
-                result=self.guided.execute(action.action_id,self.brain,use_llm=True)
-            return self._say(chat,self._deliver(chat,result))
+            return self._defer(chat,self._run_action,action.action_id,chat)
         if self.state.get(self._learn_key()):
-            temp=[]
-            try:
-                try: body,_=self._collect(message,temp)
-                except ValueError as exc: return self._say(chat,str(exc))
-            finally:
-                for item in temp: Path(item).unlink(missing_ok=True)
-            self.state.put(self._learn_key(),None)
-            return self._say(chat,self._learn_style(body))
+            return self._defer(chat,self._learn_from_message,message)
         if pending:
-            try: return self._say(chat,self._execute(message,pending,chat))
-            except (MissingActionInput,ValueError) as exc: return self._say(chat,str(exc))
+            return self._defer(chat,self._execute,message,pending,chat)
         verdict=self._style_feedback(message,text)
         if verdict is not None: return self._say(chat,verdict)
-        if self.state.get(self._intro_key()):
-            learned=self._learn_about_owner(message,chat)
-            if learned is not None: return self._say(chat,learned)
-        else:
-            profile=self._profile()
-            if profile is not None and not self._known(profile):
-                self.state.put(self._intro_key(),"1"); self._say(chat,INTRO_REQUEST,keyboard=False)
-        return self._say(chat,self._freeform(message,chat))
+        return self._defer(chat,self._intro_or_answer,message,chat)
 
 
 def run_polling():

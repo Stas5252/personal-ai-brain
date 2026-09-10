@@ -4,16 +4,23 @@ Split out of the polling runner so the adapter and the guided runner use one
 implementation instead of two that drift apart. Every method returns a bool:
 Telegram delivery is best effort and must never crash a reply that was already
 computed.
+
+Every outbound call goes through the shared rate limiter, and a 429 is no
+longer swallowed: `parameters.retry_after` is read and waited out exactly once
+before the send is retried.
 """
 from __future__ import annotations
 
 import json
 import mimetypes
 import threading
+import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 from typing import Any, Optional
+
+from src.brain.channels.telegram_ratelimit import limiter, parse_retry_after
 
 API_ROOT = "https://api.telegram.org"
 CAPTION_LIMIT = 1024
@@ -90,26 +97,53 @@ class TelegramMedia:
     def is_configured(self) -> bool:
         return bool(self.bot_token and len(self.bot_token) > 10)
 
-    def _post_json(self, method: str, payload: dict[str, Any]) -> bool:
+    def _attempt(self, request: urllib.request.Request, timeout: int) -> tuple[bool, Optional[float]]:
+        """Performs one call. Returns (delivered, retry_after or None).
+
+        Only flood control reports a retry_after; anything else returns None so
+        the caller falls back instead of waiting for a failure that is not
+        going to fix itself.
+        """
+        try:
+            with urllib.request.urlopen(request, timeout=timeout):
+                return True, None
+        except urllib.error.HTTPError as exc:
+            try:
+                body = exc.read()
+            except Exception:
+                body = b""
+            retry_after = parse_retry_after(body)
+            if retry_after is None and getattr(exc, "code", None) == 429 and exc.headers is not None:
+                retry_after = parse_retry_after(exc.headers.get("Retry-After"))
+            return False, retry_after
+        except Exception:
+            return False, None
+
+    def _post_json(self, method: str, payload: dict[str, Any], per_chat: bool = True) -> bool:
         if not self.is_configured():
             return False
-        request = urllib.request.Request(
-            f"{api_base(self.bot_token)}/{method}",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout):
-                return True
-        except Exception:
-            return False
+        url = f"{api_base(self.bot_token)}/{method}"
+        data = json.dumps(payload).encode("utf-8")
+
+        def attempt() -> tuple[bool, Optional[float]]:
+            request = urllib.request.Request(
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            return self._attempt(request, self.timeout)
+
+        chat_id = payload.get("chat_id") if per_chat else None
+        return limiter().run(chat_id, attempt)
 
     def chat_action(self, chat_id: Any, action: str = "typing") -> bool:
         """Shows '... печатает' / '... отправляет фото' for about five seconds."""
         if chat_id is None:
             return False
-        return self._post_json("sendChatAction", {"chat_id": chat_id, "action": action})
+        # Paced globally but not against the per-chat budget: a typing ping
+        # must never delay the answer it is announcing.
+        return self._post_json("sendChatAction", {"chat_id": chat_id, "action": action}, per_chat=False)
 
     def typing(self, chat_id: Any, action: str = "typing") -> "TypingSession":
         """Context manager that keeps the status alive for the whole task."""
@@ -172,21 +206,26 @@ class TelegramMedia:
         body += f"Content-Type: {mime}\r\n\r\n".encode()
         body += path.read_bytes()
         body += f"\r\n--{boundary}--\r\n".encode()
-        request = urllib.request.Request(
-            f"{api_base(self.bot_token)}/sendPhoto",
-            data=bytes(body),
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=max(self.timeout, 60)):
-                return True
-        except Exception:
-            # An unbalanced Markdown caption is the usual cause, so retry once
-            # as plain text before reporting failure.
-            if parse_mode and caption:
-                return self.send_photo(chat_id, path, caption=caption, parse_mode=None)
-            return False
+        url = f"{api_base(self.bot_token)}/sendPhoto"
+        payload = bytes(body)
+        timeout = max(self.timeout, 60)
+
+        def attempt() -> tuple[bool, Optional[float]]:
+            request = urllib.request.Request(
+                url,
+                data=payload,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            return self._attempt(request, timeout)
+
+        if limiter().run(chat_id, attempt):
+            return True
+        # An unbalanced Markdown caption is the usual cause, so retry once
+        # as plain text before reporting failure.
+        if parse_mode and caption:
+            return self.send_photo(chat_id, path, caption=caption, parse_mode=None)
+        return False
 
 
 class TypingSession:
