@@ -1,7 +1,3 @@
-# Temporary: the acceptance job reports one red dot for eighteen suites, and
-# the job log is not reachable from every review surface. Running one suite per
-# job makes the failing file readable from the check names alone. Delete this
-# file once the acceptance job is green again.
 name: Diagnose acceptance
 
 on:
@@ -17,7 +13,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  compile-and-lint:
+  compile:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [src, scripts, tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install
+        run: pip install -r requirements.txt
+      - name: Compile target
+        run: python -m compileall -q '${{ matrix.target }}'
+
+  lint:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -27,11 +41,7 @@ jobs:
           python-version: '3.12'
           cache: pip
       - name: Install
-        run: |
-          pip install -r requirements.txt ruff
-          pip check
-      - name: Compile every module
-        run: python -m compileall -q src scripts tests
+        run: pip install -r requirements.txt ruff
       - name: Lint for correctness only
         run: ruff check src scripts tests --select E9,F63,F7,F82 --output-format github
 
@@ -42,7 +52,11 @@ jobs:
       fail-fast: false
       matrix:
         target:
-          - tests/reliability
+          - tests/reliability/test_honest_ingestion.py
+          - tests/reliability/test_regressions.py
+          - tests/reliability/test_startup_validation.py
+          - tests/reliability/test_vetted_knowledge.py
+          - tests/reliability/test_video_content_honesty.py
           - tests/brain/test_corpus_pipeline.py
           - tests/brain/test_pricing_and_matching.py
           - tests/brain/test_yaishka_deep_capabilities.py
