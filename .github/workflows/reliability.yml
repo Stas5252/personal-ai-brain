@@ -43,10 +43,17 @@ jobs:
           python scripts/validate_environment.py api
           python scripts/validate_environment.py telegram
           docker compose config --quiet
+      - name: Course corpus is discoverable and ingestible
+        env:
+          BRAIN_API_KEY: ci-only-random-brain-api-key-000000000000000000
+          GEMINI_API_KEY: ci-gemini-placeholder
+        run: |
+          python scripts/ingest_course_corpus.py --dry-run
       - name: Deterministic reliability and product acceptance
         run: |
           pytest -q \
             tests/reliability \
+            tests/brain/test_corpus_pipeline.py \
             tests/brain/test_yaishka_deep_capabilities.py \
             tests/brain/test_photographer_acceptance.py \
             tests/brain/test_product_scenarios_50.py \
