@@ -54,6 +54,7 @@ jobs:
           pytest -q \
             tests/reliability \
             tests/brain/test_corpus_pipeline.py \
+            tests/brain/test_pricing_and_matching.py \
             tests/brain/test_yaishka_deep_capabilities.py \
             tests/brain/test_photographer_acceptance.py \
             tests/brain/test_product_scenarios_50.py \
