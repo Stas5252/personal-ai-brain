@@ -6,6 +6,11 @@ reason. It never writes a placeholder picture, never invents a URL and never
 describes an image it did not receive. Every returned byte is checked against
 image magic numbers before it is written to disk, so a text error page can not
 be saved as a `.png`.
+
+One more rule holds since the visual identity work: when a reference set or a
+character sheet is supplied, the prompt carries an identity lock, the finished
+frame is audited offline, and exactly one strengthened retry is made when the
+audit finds something a prompt can actually fix.
 """
 from __future__ import annotations
 
@@ -28,6 +33,7 @@ from src.brain.config import (
     IMAGE_MODEL,
     IMAGE_TIMEOUT_SECONDS,
 )
+from src.brain.engines import visual_identity as vi
 
 STATUS_AVAILABLE = "AVAILABLE"
 STATUS_UNAVAILABLE = "UNAVAILABLE"
@@ -102,9 +108,13 @@ class ImageEngine:
     # -- prompt building ----------------------------------------------------
     @staticmethod
     def _deterministic_prompt(
-        brief: str, profile: Any = None, aspect_ratio: Optional[str] = None, editing: bool = False
+        brief: str,
+        profile: Any = None,
+        aspect_ratio: Optional[str] = None,
+        editing: bool = False,
+        identity: str = "",
     ) -> str:
-        """Builds the prompt from the brief and the stored profile only.
+        """Builds the prompt from the brief, the stored profile and the character sheet.
 
         No invented biography, no invented city, no invented awards: every line
         below is either a constant instruction or a value the owner supplied.
@@ -123,6 +133,9 @@ class ImageEngine:
         else:
             lines.append("Сгенерируй фотореалистичное изображение по брифу фотографа.")
         lines.append(f"Бриф: {brief}" if brief else "Бриф: доработай присланный кадр без смены сюжета.")
+        identity_block = (identity or "").strip()
+        if identity_block:
+            lines.append(identity_block)
         if niche:
             lines.append(f"Жанр съёмки: {niche}.")
         if city:
@@ -149,8 +162,9 @@ class ImageEngine:
         use_llm: bool = True,
         aspect_ratio: Optional[str] = None,
         editing: bool = False,
+        identity: str = "",
     ) -> str:
-        base = self._deterministic_prompt(brief, profile, aspect_ratio, editing)
+        base = self._deterministic_prompt(brief, profile, aspect_ratio, editing, identity)
         if not use_llm:
             return base
         try:
@@ -171,7 +185,13 @@ class ImageEngine:
         if status != 200 or len(enriched) < 60:
             return base
         tail = base.split("Не добавляй текст", 1)[-1]
-        return (enriched[:MAX_PROMPT_CHARS] + "\nНе добавляй текст" + tail)[:MAX_PROMPT_CHARS]
+        merged = enriched[:MAX_PROMPT_CHARS] + "\nНе добавляй текст" + tail
+        # The rewrite is free to drop anything, and the first thing it drops is
+        # the boring repetition about the face. Put the lock back, in front,
+        # so it also survives the length cap.
+        if identity and vi.IDENTITY_MARKER not in merged:
+            merged = identity.strip() + "\n" + merged
+        return merged[:MAX_PROMPT_CHARS]
 
     # -- transport ----------------------------------------------------------
     def _endpoint(self, model: str) -> str:
@@ -269,36 +289,29 @@ class ImageEngine:
             }
         }
 
-    # -- public API ---------------------------------------------------------
-    def generate(
-        self,
-        request: str = "",
-        profile: Any = None,
-        reference_image_path: Optional[str | Path] = None,
-        use_llm: bool = True,
-        aspect_ratio: Optional[str] = None,
-    ) -> dict[str, Any]:
-        brief = (request or "").strip()[:MAX_PROMPT_CHARS]
-        if not brief and not reference_image_path:
-            raise ValueError("Опиши, что нужно сгенерировать, или пришли фото-референс.")
-        if not self.is_configured():
-            return self._unavailable(
-                "GEMINI_API_KEY не задан, поэтому генерация изображений выключена. "
-                "Добавь ключ в .env и перезапусти контейнер — заглушку вместо картинки я не пришлю."
-            )
+    def _reference_parts(
+        self, selected: list[dict[str, Any]]
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
+        """Turns a stored reference set into request parts.
 
+        A single unreadable file must not kill the whole generation: it is
+        skipped and reported by name, the rest of the set still goes out.
+        """
         parts: list[dict[str, Any]] = []
-        reference = None
-        if reference_image_path:
-            reference = self._reference_part(Path(reference_image_path))
-        prompt = self.build_prompt(
-            brief, profile=profile, use_llm=use_llm, aspect_ratio=aspect_ratio, editing=bool(reference)
-        )
-        parts.append({"text": prompt})
-        if reference:
-            parts.append(reference)
+        used: list[dict[str, Any]] = []
+        skipped: list[str] = []
+        for item in selected:
+            path = Path(str(item.get("path") or ""))
+            try:
+                parts.append(self._reference_part(path))
+            except (ValueError, OSError) as exc:
+                skipped.append(f"{path.name}: {exc}")
+                continue
+            used.append(item)
+        return parts, used, skipped
 
-        errors: list[str] = []
+    # -- one round trip -----------------------------------------------------
+    def _attempt(self, parts: list[dict[str, Any]], errors: list[str]) -> Optional[dict[str, Any]]:
         for model in self.models:
             for payload in self._payload_variants(parts):
                 try:
@@ -335,11 +348,98 @@ class ImageEngine:
                     "mime_type": mime,
                     "bytes": len(raw),
                     "model": model,
-                    "prompt": prompt,
                     "notes": notes,
-                    "reference_used": bool(reference),
                 }
+        return None
 
-        return self._unavailable(
-            "Генерация не удалась. " + "; ".join(errors[:3] or ["upstream не ответил"]), prompt
+    # -- public API ---------------------------------------------------------
+    def generate(
+        self,
+        request: str = "",
+        profile: Any = None,
+        reference_image_path: Optional[str | Path] = None,
+        use_llm: bool = True,
+        aspect_ratio: Optional[str] = None,
+        references: Optional[list[dict[str, Any]]] = None,
+        character_traits: Optional[dict[str, Any]] = None,
+        qa_retry: bool = True,
+    ) -> dict[str, Any]:
+        brief = (request or "").strip()[:MAX_PROMPT_CHARS]
+        if not brief and not reference_image_path and not references:
+            raise ValueError("Опиши, что нужно сгенерировать, или пришли фото-референс.")
+        if not self.is_configured():
+            return self._unavailable(
+                "GEMINI_API_KEY не задан, поэтому генерация изображений выключена. "
+                "Добавь ключ в .env и перезапусти контейнер — заглушку вместо картинки я не пришлю."
+            )
+
+        edit_reference = None
+        if reference_image_path:
+            edit_reference = self._reference_part(Path(reference_image_path))
+
+        selected = vi.select_references(
+            references, limit=vi.MAX_REFERENCES - (1 if edit_reference else 0)
         )
+        extra_parts, used, skipped = self._reference_parts(selected)
+        sheet = vi.character_sheet(character_traits)
+        identity = vi.identity_lock(sheet, [item["role"] for item in used]) if (sheet or used) else ""
+
+        prompt = self.build_prompt(
+            brief,
+            profile=profile,
+            use_llm=use_llm,
+            aspect_ratio=aspect_ratio,
+            editing=bool(edit_reference),
+            identity=identity,
+        )
+
+        def _parts(text: str) -> list[dict[str, Any]]:
+            payload: list[dict[str, Any]] = [{"text": text}]
+            if edit_reference:
+                payload.append(edit_reference)
+            payload.extend(extra_parts)
+            return payload
+
+        reference_count = (1 if edit_reference else 0) + len(used)
+        common = {
+            "reference_used": bool(edit_reference),
+            "references_used": reference_count,
+            "references_skipped": skipped,
+            "character_sheet": sheet,
+        }
+
+        errors: list[str] = []
+        first = self._attempt(_parts(prompt), errors)
+        if first is None:
+            return self._unavailable(
+                "Генерация не удалась. " + "; ".join(errors[:3] or ["upstream не ответил"]), prompt
+            )
+        first.update(common)
+        first["prompt"] = prompt
+        first["attempts"] = 1
+
+        findings = vi.qa_findings(
+            first, prompt=prompt, references=reference_count, aspect_ratio=aspect_ratio
+        )
+        if findings and qa_retry and vi.should_retry(findings):
+            stronger = vi.strengthen_prompt(
+                prompt, findings, sheet=sheet, aspect_ratio=aspect_ratio
+            )
+            retry_errors: list[str] = []
+            second = self._attempt(_parts(stronger), retry_errors)
+            if second is not None:
+                second.update(common)
+                second["prompt"] = stronger
+                second["attempts"] = 2
+                second["retry_reason"] = vi.explain_findings(findings)
+                second_findings = vi.qa_findings(
+                    second, prompt=stronger, references=reference_count, aspect_ratio=aspect_ratio
+                )
+                second["qa"] = second_findings
+                second["qa_notes"] = vi.explain_findings(second_findings)
+                return second
+            errors.extend(retry_errors)
+
+        first["qa"] = findings
+        first["qa_notes"] = vi.explain_findings(findings)
+        return first
