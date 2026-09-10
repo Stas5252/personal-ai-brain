@@ -1,26 +1,13 @@
-"""Telegram runner v3+ — ALL Yaishka features + more.
+"""Telegram runner v3 — Yaishka-style 4-section bot.
 
-Features vs Yaishka:
-  ✅ AI chat for any question (already had)
-  ✅ Content & social media (posts, reels, stories, content plan)
-  ✅ Sales & clients (scripts, objections, price, offers)
-  ✅ Photo shoots (moodboard, photo analysis, concepts, checklists)
-  ✅ Promotion & packaging (account audit, bio, highlights, competitors)
-  ✅ Voice message support
-  ✅ Photo/document analysis
-  ✅ Remembers your profile (niche, clients, style)
-  ✅ Prompt library (/library)
-  ✅ Mini-lessons (/uroki)
-  ✅ Reminder system (auto-reminds after 3+ days inactive)
-  🆕 Photo day planner (full event planning)
-  🆕 Style learning from examples
-  🆕 Competitor analysis
-  🆕 Seasonal offers generator
-  🆕 Newsletter/broadcast writer
-  🆕 Client questionnaire builder
-  🆕 Positioning workshop
-  🆕 Income/pricing calculator advice
-  🆕 Step-by-step objection flows
+New features vs v2:
+  - 4 category sections: Content / Sales / Shoots / Promo
+  - /library (библиотека) — prompt library with navigation
+  - /uroki (уроки) — sequential AI mini-lessons
+  - /help (помощь) — command reference
+  - ReminderScheduler — inactivity reminders after 3 days
+  - Smart photo-caption routing
+  - last_activity tracking
 """
 import json
 import logging
@@ -30,206 +17,465 @@ import time
 import urllib.request
 import uuid
 from pathlib import Path
+
 from src.brain.config import DATA_DIR, TELEGRAM_BOT_TOKEN, MAX_FILE_SIZE_BYTES
 from src.brain.channels.runtime_state import RuntimeState, owner_allowed, process_request
+from src.brain.channels.bot_config import (
+    ACTIONS, KEYBOARD_MAIN, CATEGORY_KEYBOARDS, CATEGORY_INTROS,
+    ACTIONS_CONTENT, ACTIONS_SALES, ACTIONS_SHOOTS, ACTIONS_PROMO,
+)
+from src.brain.channels.bot_features import (
+    MINI_LESSONS, REMINDER_MESSAGES,
+    KEYBOARD_LIBRARY, LIBRARY_CATEGORY_MAP,
+    ReminderScheduler, format_prompt_library_category, get_prompt_by_number,
+)
 
 log = logging.getLogger(__name__)
 UPLOADS = DATA_DIR / 'uploads'
 
-# ============================================================
-# PROMPT LIBRARY — ready-made prompts organised by category
-# ============================================================
-PROMPT_LIBRARY = {
-    'content': [
-        ('🎥 Reels — 7 идей', 'Придумай 7 идей Reels для фотографа моей ниши. Для каждой: цепляющий хук в первые 3 секунды, визуальный ряд, текст на экране и призыв к действию.'),
-        ('📖 Сценарий Reels', 'Напиши полный сценарий Reels на тему [ТЕМА]. Формат: крупный хук, 5-7 шагов, текст на экране для каждого, музыкальное настроение.'),
-        ('💬 Сторис — нечего показывать', 'У меня сегодня нечего показывать в Stories. Придумай 5 идей Stories без фото или с телефоном — вовлекающих, лёгких в съёмке.'),
-        ('📝 Написать пост как я', 'Вот мои последние 3 поста: [ВСТАВЬ ПОСТЫ]. Изучи мой стиль и напиши новый пост на тему [ТЕМА], чтобы он звучал как я.'),
-        ('📅 Контент-план на неделю', 'Составь контент-план на 7 дней для фотографа моей ниши. Чередование рубрик: экспертный, личный, продающий, вовлекающий. Форматы и хуки.'),
-        ('🔥 Виральный заголовок', 'Придумай 10 виральных заголовков для поста на тему [ТЕМА]. Используй формулы: вопрос, разоблачение, провокация, цифры, обещание.'),
-        ('🎤 Сторителлинг из истории', 'Я расскажу историю со съёмки. Найди в ней интересную тему и помоги превратить в живой пост с личной интонацией.'),
-        ('🏷 Хэштеги', 'Подбери 25 хэштегов для публикации о [ТЕМА] — микро (до 50K), мид (50-500K) и топовые. Объясни логику подбора.'),
-    ],
-    'sales': [
-        ('💰 Прайс по правилу трёх', 'Составь прайс-лист по правилу трёх тарифов: ЛАЙТ, ОПТИМАЛЬНЫЙ и ПРЕМИУМ. С наполнением, гарантиями и слоганом для каждого.'),
-        ('🔎 Прайс глазами клиента', 'Вот мой прайс: [ВСТАВЬ ПРАЙС]. Посмотри на него глазами клиента и объясни, почему он выбирает самый дешёвый пакет.'),
-        ('🛑 Возражение ДОРОГО', 'Клиент написал что дорого. Дай мне 3 варианта ответа: мягкий, уверенный и с переключением на ценность.'),
-        ('🤔 Возражение ПОДУМАЕМ', 'Клиент написал: Спасибо, мы подумаем. Вот переписка: [ВСТАВЬ]. Разбери где потеряла интерес и дай скрипт ответа.'),
-        ('📨 Рассылка по клиентам', 'Напиши текст рассылки по базе клиентов с предложением [ОФФЕР]. Тёплый тон, не спамный, с призывом записаться.'),
-        ('📆 Фотодень: полный план', 'Помоги спланировать фотодень на тему [ТЕМА]: концепция, дата, место, цены, пакеты, как продавать, чек-лист дня.'),
-        ('🎁 Сертификат / подарок', 'Придумай сертификат на фотосессию: название, формат, что включает, как оформить, как продавать как подарок.'),
-        ('📊 Сезонный оффер', 'Придумай сезонный оффер для [СЕЗОН/ПРАЗДНИК]: идея, название, что включает, ограничение по времени и CTA.'),
-        ('📋 Анкета клиента', 'Составь анкету для новых клиентов перед съёмкой. 10-12 вопросов: о них, ожиданиях, страхах, предпочтениях и деталях.'),
-        ('⚖️ Спорная ситуация', 'Помоги разобрать конфликтную ситуацию с клиентом: [ОПИШИ]. Где моя просадка, где клиент перегибает, скрипт ответа.'),
-    ],
-    'shoots': [
-        ('🎨 Мудборд съёмки', 'Составь подробный мудборд: концепция, палитра из 5 HEX-оттенков, 7 образов, локация, 5 идей кадров с позами, блок Важно ♡.'),
-        ('🔍 Разбор фото', 'Разбери фотографию по 5 аспектам: свет и тень, композиция, поза и эмоция, цвет и скинтон, техника. И 3 шага для улучшения.'),
-        ('💡 Концепция съёмки', 'Придумай 3 концепции для [ТИП СЪЁМКИ]: название, настроение, локация, образы, ключевые кадры.'),
-        ('👗 Образы и реквизит', 'Предложи 5 образов для [КЛИЕНТ/ТЕМА]. Для каждого: цвет, фасон, аксессуары, реквизит и где купить/взять.'),
-        ('🎵 Треки для съёмки', 'Подбери 5 атмосферных треков для [СЪЁМКА/REELS]. Жанр, настроение, темп и почему подходят.'),
-        ('📋 Чек-лист подготовки', 'Составь чек-лист подготовки клиента к [ТИП СЪЁМКИ] для клиента. Персональный список.'),
-    ],
-    'promotion': [
-        ('✨ Аудит профиля', 'Сделай профессиональный аудит профиля: шапка, УТП, навигация хайлайтов, ритм ленты. Что непонятно потенциальному клиенту.'),
-        ('🏷 Шапка профиля', 'Напиши 3 варианта шапки профиля для фотографа [НИША]. С позиционированием, УТП и призывом. До 150 символов.'),
-        ('📌 Хайлайты / навигация', 'Придумай структуру хайлайтов для фотографа [НИША]: категории, названия, что размещать в каждом.'),
-        ('🔎 Анализ конкурента', 'Проанализируй аккаунт конкурента по скриншоту или описанию: сильные стороны, слабости, что взять себе.'),
-        ('🧭 Позиционирование', 'Помоги с позиционированием: кто я, для кого, в чём уникальность. Через вопросы найдём твоё отличие от 100 других фотографов.'),
-        ('🎤 Распаковка личности', 'Проведи распаковку личности — задай 10 вопросов чтобы найти мой уникальный опыт, ценности и историю для блога.'),
-        ('📪 Описание услуги', 'Напиши продающее описание услуги [УСЛУГА] для сайта или профиля. С болями клиента, выгодами и призывом.'),
-    ],
-}
 
-# ============================================================
-# MINI LESSONS
-# ============================================================
-MINI_LESSONS = [
-    {
-        'title': 'Урок 1: Как правильно ставить задачи ИИ',
-        'text': (
-            '🎓 *Урок 1: Как правильно ставить задачи ИИ*\n\n'
-            'Плохой запрос: «Напиши пост»\n'
-            'Хороший запрос: «Напиши пост о семейных съёмках для мам с детьми 3-7 лет. '
-            'Стиль: тёплый, немного смешной. Длина 150 слов. Заканчивается вопросом к читателю.»\n\n'
-            '**Формула сильного запроса:**\n'
-            '1. Кто ты (фотограф, ниша)\n'
-            '2. Что нужно сделать (написать пост / придумать идеи)\n'
-            '3. Для кого (твоя аудитория)\n'
-            '4. В каком стиле (тёплый / экспертный / провокационный)\n'
-            '5. Дополнительно (длина, формат, CTA)\n\n'
-            '💡 *Совет:* Чем больше контекста — тем точнее результат. Не бойсь «перегрузить» деталями!'
+class TelegramHTTP:
+    def __init__(self, token):
+        self.base = 'https://api.telegram.org/bot' + token
+        self.files_base = 'https://api.telegram.org/file/bot' + token + '/'
+
+    def call(self, method, payload):
+        request = urllib.request.Request(
+            self.base + '/' + method,
+            data=json.dumps(payload).encode(),
+            headers={'Content-Type': 'application/json'},
         )
-    },
-    {
-        'title': 'Урок 2: Голосовые сообщения — твой суперинструмент',
-        'text': (
-            '🎓 *Урок 2: Голосовые — твой суперинструмент*\n\n'
-            'Не нужно писать длинные сообщения. Просто наговори голосовым!\n\n'
-            '**Что можно наговорить:**\n'
-            '• Историю со съёмки → получи готовый пост\n'
-            '• Описание клиента и ситуации → получи скрипт ответа\n'
-            '• Что хочешь снять → получи мудборд\n'
-            '• Свой прайс → получи анализ и улучшения\n\n'
-            '💡 *Совет:* Говори как обычно — ИИ сам поймёт задачу и уточнит что нужно.'
+        with urllib.request.urlopen(request, timeout=40) as response:
+            data = json.load(response)
+        if not data.get('ok'):
+            raise RuntimeError(f'Telegram rejected: {data}')
+        return data['result']
+
+    def send(self, chat, text, keyboard=None, parse_mode=None):
+        kb = keyboard if keyboard is not None else KEYBOARD_MAIN
+        for offset in range(0, max(len(text), 1), 1800):
+            payload = {
+                'chat_id': chat,
+                'text': text[offset:offset + 1800] or '...',
+                'reply_markup': kb,
+            }
+            if parse_mode:
+                payload['parse_mode'] = parse_mode
+            try:
+                self.call('sendMessage', payload)
+            except Exception:
+                payload.pop('parse_mode', None)
+                self.call('sendMessage', payload)
+
+    def typing(self, chat):
+        try:
+            self.call('sendChatAction', {'chat_id': chat, 'action': 'typing'})
+        except Exception:
+            pass
+
+    def typing_loop(self, chat, stop_event: threading.Event):
+        while not stop_event.is_set():
+            self.typing(chat)
+            stop_event.wait(4.0)
+
+    def download(self, file, suffix):
+        if file.get('file_size', 0) > MAX_FILE_SIZE_BYTES:
+            raise ValueError('Файл слишком большой для установленного лимита.')
+        remote = self.call('getFile', {'file_id': file['file_id']})
+        UPLOADS.mkdir(parents=True, exist_ok=True)
+        target = UPLOADS / (uuid.uuid4().hex + suffix)
+        try:
+            with urllib.request.urlopen(self.files_base + remote['file_path'], timeout=60) as r:
+                with target.open('xb') as out:
+                    size = 0
+                    while chunk := r.read(1024 * 1024):
+                        size += len(chunk)
+                        if size > MAX_FILE_SIZE_BYTES:
+                            raise ValueError('Файл слишком большой.')
+                        out.write(chunk)
+            if not target.stat().st_size:
+                raise ValueError('Получен пустой файл.')
+            return target
+        except BaseException:
+            target.unlink(missing_ok=True)
+            raise
+
+
+class Bot:
+    def __init__(self, api, brain, state, owner):
+        self.api = api
+        self.brain = brain
+        self.state = state
+        self.owner = owner
+
+    # ------------------------------------------------------------------ #
+    #  Internal helpers
+    # ------------------------------------------------------------------ #
+    def _track_activity(self):
+        self.state.put('last_activity', str(time.time()))
+        self.state.put('reminder_sent_at', '')
+
+    def _current_keyboard(self):
+        cat = self.state.get(f'category:{self.owner}')
+        if cat == 'library':
+            return KEYBOARD_LIBRARY
+        return CATEGORY_KEYBOARDS.get(cat, KEYBOARD_MAIN)
+
+    # ------------------------------------------------------------------ #
+    #  Main entry point
+    # ------------------------------------------------------------------ #
+    def reply(self, message):
+        if not owner_allowed(message, self.owner):
+            return None
+
+        text = message.get('text', '').strip()
+        caption = message.get('caption', '').strip()
+        chat_id = (
+            message.get('chat', {}).get('id')
+            or message.get('from', {}).get('id')
         )
-    },
-    {
-        'title': 'Урок 3: Как создавать контент быстро',
-        'text': (
-            '🎓 *Урок 3: Система быстрого создания контента*\n\n'
-            '**Правило одного инфоповода:**\n'
-            'Один инфоповод = несколько единиц контента\n'
-            '→ История со съёмки → пост → сторис → Reels → идея для следующего\n\n'
-            '**80/20 контент-микс:**\n'
-            '• 80% — польза, личное, развлечение\n'
-            '• 20% — продажи\n\n'
-            '**Контент без лица (если не хочешь светиться):**\n'
-            '• Цитата на фоне\n• Скрин переписки (анонимно)\n'
-            '• Опрос\n'
-            '• Подсказка/инструкция\n• Отзыв клиента\n\n'
-            '💡 *Совет:* Попроси меня составить контент-план на неделю — это экономит 3+ часа в неделю!'
-        )
-    },
-    {
-        'title': 'Урок 4: Продажи без навязчивости',
-        'text': (
-            '🎓 *Урок 4: Продажи без навязчивости*\n\n'
-            '**Главный принцип:** Продажа = помощь клиенту решить его задачу.\n\n'
-            '**Никогда не делай:**\n'
-            '❌ Сразу кидай прайс молча\n'
-            '❌ Снижай цену при первом возражении\n'
-            '❌ Говори «у меня сейчас скидочки»\n\n'
-            '**Всегда делай:**\n'
-            '✅ Сначала выясни задачу клиента\n'
-            '✅ Покажи ценность до цены\n'
-            '✅ Предложи альтернативу вместо скидки\n\n'
-            '💡 *Совет:* Пришли переписку с клиентом — разберём где теряется продажа!'
-        )
-    },
-    {
-        'title': 'Урок 5: Разбор фото — как учиться на своих работах',
-        'text': (
-            '🎓 *Урок 5: Разбор фото за 5 минут*\n\n'
-            'Пришли мне фотографию и я разберу по 5 критериям:\n\n'
-            '1️⃣ **Свет и тень** — источник, направление, контраст\n'
-            '2️⃣ **Композиция** — правило третей, ракурс, планы\n'
-            '3️⃣ **Поза и эмоция** — логика позы, контакт с камерой\n'
-            '4️⃣ **Цвет и скинтон** — гармония, обработка\n'
-            '5️⃣ **Техника** — резкость, фокус, экспозиция\n\n'
-            'Плюс — 3 конкретных шага как сделать кадр в 2 раза сильнее!\n\n'
-            '💡 *Совет:* Разбирай 1 фото в день — через месяц заметишь рост!'
-        )
-    },
-]
+        session_key = f'onboarding:{self.owner}'
+        profile = self.brain.profile_engine
 
-# ============================================================
-# REMINDER MESSAGES
-# ============================================================
-REMINDER_MESSAGES = [
-    '👋 Привет! Я давно тебя не видела. Хочешь сегодня разберём идеи для контента на эту неделю? Просто напиши «да» или нажми кнопку 📅 Контент-план!',
-    '📸 Привет! Давно не заходила. Кстати — есть идея для Reels, который может зайти прямо сейчас. Написать? 🎥',
-    '💡 Привет! Ты давно не появлялась. Напомню: у тебя ещё не готов ответ на «мы подумаем»? Могу написать скрипт прямо сейчас!',
-    '✨ Привет! Соскучилась. Может, разберём твой профиль глазами клиента? Это займёт 5 минут и может сильно увеличить конверсию.',
-    '🤝 Привет! Давно не было задач. Расскажи как дела — что сейчас самое сложное в работе? Помогу разобраться.',
-    '🎯 Привет! Я тут. Если есть клиент на паузе или переписка которая зависла — пришли мне, разберём!',
-]
+        self._track_activity()
 
-# ============================================================
-# ACTIONS — keyboard button → AI prompt mapping
-# ============================================================
-ACTIONS = {
-    # CONTENT & SOCIAL MEDIA
-    '🎥 Идеи Reels': 'Придумай 7 идей Reels для фотографа моей ниши. Для каждой: цепляющий хук (первые 3 секунды), визуальный ряд, текст на экране и призыв к действию.',
-    '📖 Сценарий Reels': 'Напиши полный сценарий Reels. Уточни: какая тема или задай наводящий вопрос чтобы понять о чём снимать.',
-    '💬 Идеи Сторис': 'Придумай 7 идей для Stories на эту неделю — вовлекающих, продающих и личных. Включая варианты без лица.',
-    '📝 Написать пост': 'Помоги написать пост. Уточни тему, нишу и желаемый стиль — или попроси прислать примеры старых постов.',
-    '📅 Контент-план': 'Составь контент-план на 7 дней: чередование рубрик (сторителлинг, экспертиза, бэкстейдж, продажи, вовлечение), форматы и хуки для каждого.',
-    '✍️ Пост в моём стиле': 'Изучи мой стиль и напиши новый пост. Попроси прислать 3-5 примеров старых постов или описание темы.',
+        # ---------------------------------------------------------------- #
+        # NAVIGATION: main categories
+        # ---------------------------------------------------------------- #
+        if text in CATEGORY_INTROS:
+            self.state.put(f'category:{self.owner}', text)
+            intro = CATEGORY_INTROS[text]
+            kb = CATEGORY_KEYBOARDS[text]
+            self.api.send(chat_id, intro, keyboard=kb)
+            return None  # already sent
 
-    # SALES & CLIENTS
-    '💰 Составить прайс': 'Составь красивый прайс-лист по правилу трёх тарифов: ЛАЙТ, ОПТИМАЛЬНЫЙ и ПРЕМИУМ. С наполнением, гарантиями и слоганом для каждого пакета.',
-    '🔎 Разбор прайса': 'Разбери мой прайс глазами клиента. Пришли прайс текстом — объясню почему клиент выбирает самый дешёвый и как это исправить.',
-    '📨 Ответить клиенту': 'Помоги ответить клиенту. Опиши ситуацию или пришли скриншот переписки — напишу готовый текст ответа.',
-    '⚖️ Спорная ситуация': 'Помоги разобрать конфликт или спорную ситуацию с клиентом. Опиши что произошло — разберём где просадка и дам скрипт.',
-    '🛑 Возражение ДОРОГО': 'Клиент говорит ДОРОГО. Дай 3 варианта ответа на это возражение — мягкий, уверенный и с переключением на ценность. Учти мою нишу и прайс.',
-    '🤔 Возражение ПОДУМАЕМ': 'Клиент написал «подумаем» или «спасибо, мы подумаем». Пришли переписку — разберу где потеряла интерес и дам скрипт продолжения диалога.',
-    '📆 Фотодень': 'Помоги спланировать фотодень. Задай мне вопросы: тема, дата, место, целевая аудитория — и составим полный план с концепцией, ценами и продажами.',
-    '🎁 Сертификат/оффер': 'Придумай сертификат на фотосессию или специальный оффер. Уточни: для кого, к какому поводу, какой бюджет клиента.',
-    '📊 Сезонный оффер': 'Придумай сезонный оффер для ближайшего праздника или сезона. Название, наполнение, ограничение и продающий текст.',
+        if text == '⬅️ Назад':
+            self.state.put(f'category:{self.owner}', None)
+            self.api.send(chat_id, 'Главное меню:', keyboard=KEYBOARD_MAIN)
+            return None
 
-    # PHOTO SHOOTS
-    '🎨 Мудборд съёмки': 'Составь подробный мудборд съёмки: концепция + настроение, цветовая палитра из 5 HEX-оттенков, 7 сочетаний образов, локация, 5 идей кадров с позами, блок «Важно ♡».',
-    '🔍 Разбор фото': 'Разбери фотографию по 5 аспектам: свет и тень, композиция и ракурс, поза и эмоция, цвет и скинтон, техника. Плюс 3 конкретных шага как сделать кадр сильнее.',
-    '💡 Концепция съёмки': 'Придумай 3 концепции для съёмки. Уточни: тип (семья/лав стори/детская/портрет), сезон, предпочтения клиента.',
-    '👗 Образы и реквизит': 'Предложи образы и реквизит для съёмки. Опиши клиента и локацию — дам 5 готовых образов с деталями.',
-    '🎵 Подбор треков': 'Подбери 4-5 треков для съёмки, Reels или Stories. Уточни настроение, жанр и цель использования.',
-    '📋 Чек-лист клиента': 'Составь чек-лист подготовки клиента к съёмке. Уточни тип съёмки — сделаю персональный список.',
+        # ---------------------------------------------------------------- #
+        # PROMPT LIBRARY navigation
+        # ---------------------------------------------------------------- #
+        if text == 'Назад' and self.state.get(f'category:{self.owner}') == 'library':
+            self.state.put(f'category:{self.owner}', None)
+            self.api.send(chat_id, 'Главное меню:', keyboard=KEYBOARD_MAIN)
+            return None
 
-    # PROMOTION & PACKAGING
-    '✨ Разбор аккаунта': 'Сделай профессиональный аудит профиля: шапка, УТП, навигация хайлайтов, ритм ленты. Что непонятно потенциальному клиенту. Пришли скриншот или опиши.',
-    '🏷 Шапка профиля': 'Напиши 3 варианта шапки профиля. С позиционированием, УТП и призывом. До 150 символов.',
-    '📌 Хайлайты': 'Придумай структуру хайлайтов: категории, названия, что размещать в каждом — для моей ниши.',
-    '🔎 Анализ конкурента': 'Проанализируй аккаунт конкурента. Пришли скриншот или ссылку — разберём сильные стороны, слабости и что взять себе.',
-    '🧭 Позиционирование': 'Помоги с позиционированием через вопросы. Найдём чем ты отличаешься от других фотографов и как это сформулировать.',
-    '🎤 Распаковка личности': 'Проведи распаковку личности — задай 10 вопросов чтобы найти мой уникальный опыт, ценности и историю для блога.',
+        if text in LIBRARY_CATEGORY_MAP:
+            cat_key = LIBRARY_CATEGORY_MAP[text]
+            self.state.put(f'lib_cat:{self.owner}', cat_key)
+            msg = format_prompt_library_category(cat_key)
+            self.api.send(chat_id, msg, keyboard=KEYBOARD_LIBRARY)
+            return None
 
-    # UTILITY
-    '📅 План дня': 'Помоги составить план дня. Без выдуманных событий — только 3 главных приоритета на сегодня по задачам: съёмки, клиенты, контент.',
-    '📚 Библиотека промптов': 'LIBRARY',
-    '🎓 Урок': 'LESSON',
-    '🔙 Меню': 'MAIN_MENU',
-}
+        # Check if user types a number to get full library prompt
+        lib_cat = self.state.get(f'lib_cat:{self.owner}')
+        if lib_cat and text.isdigit():
+            full_prompt = get_prompt_by_number(lib_cat, int(text))
+            if full_prompt:
+                self.api.send(chat_id, full_prompt, keyboard=KEYBOARD_LIBRARY)
+                return None
 
-# ============================================================
-# KEYBOARDS
-# ============================================================
-MAIN_KEYBOARD = {
-    'keyboard': [
-        [{'text': '✨ Контент'}, {'text': '🤝 Продажи'}, {'text': '📸 Съёмки'}, {'text': '🚀 Продвижение'}],
-        [{'text': '🎥 Идеи Reels'}, {'text': '💬 Идеи Сторис'}, {'text': '📝 Написать пост'}],
-        [{'text': '💰 Составить прайс'}, {'text': '📨 Ответить клиенту'}, {'text': '📆 Фотодень'}],
-        [{'text': '🎨 Мудборд съёмки'}, {'text': '🔍 Разбор фото'}, {'text': '✨ Разбор аккаунта'}],
-        [{'text': '📅 Контент-план'}, {'text': '📚 Библиотека промптов'}, {'text': '🎓 Урок'}],
-    ],
-    '
+        # ---------------------------------------------------------------- #
+        # COMMANDS
+        # ---------------------------------------------------------------- #
+        if text in ['/reset', '/start_over']:
+            from src.brain.models.profile import UserProfile
+            self.state.put(session_key, 'freeform')
+            self.state.put(f'category:{self.owner}', None)
+            profile.save_profile(UserProfile())
+            self.api.send(chat_id, (
+                'Профиль полностью сброшен! 🔄\n\n'
+                'Давай познакомимся с чистого листа. Напиши текстом или отправь голосовое:\n'
+                '• Как тебя зовут?\n• Город?\n• Ниша и средний чек?\n• Главная цель?'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text == '/start':
+            p = profile.get_profile()
+            if p.identity and p.niche:
+                self.api.send(chat_id, (
+                    f'Привет, {p.identity}! Твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. \ud83d\udcf8\n\n'
+                    f'Твой профиль: {p.niche} ({p.city or "город не указан"}).\n'
+                    'Выбирай раздел ниже или просто напиши голосовое!\n\n'
+                    '📋 Команды: /profile | /brief | /library | /uroki | /help | /reset'
+                ), keyboard=KEYBOARD_MAIN)
+            else:
+                self.state.put(session_key, 'freeform')
+                self.api.send(chat_id, (
+                    'Привет! Я твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. \ud83d\udcf8\n'
+                    'Давай познакомимся — напиши или отправь голосовое:\n\n'
+                    '• Как тебя зовут?\n• Город?\n• Ниша и средний чек?\n• Главная цель?'
+                ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text == '/cancel':
+            self.state.put(session_key, None)
+            self.api.send(chat_id, 'Бриф остановлен. /brief — начать заново, /profile — посмотреть.', keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text == '/profile':
+            p = profile.get_profile()
+            prices_str = ', '.join([f'{k}: {v}' for k, v in (p.pricing or p.prices or {}).items()]) or 'не указан'
+            goals_str = ', '.join(p.goals) if p.goals else 'не указаны'
+            services_str = ', '.join(p.services) if p.services else 'не указаны'
+            self.api.send(chat_id, (
+                '👤 Профиль фотографа:\n'
+                f'• Имя: {p.identity or "не указано"}\n'
+                f'• Город: {p.city or "не указан"}\n'
+                f'• Ниша: {p.niche or "не указана"}\n'
+                f'• Услуги: {services_str}\n'
+                f'• Прайс: {prices_str}\n'
+                f'• Цели: {goals_str}\n\n'
+                'Обновить: /brief | Сбросить: /reset'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text == '/brief':
+            self.state.put(session_key, 'freeform')
+            self.api.send(chat_id, (
+                'Давай обновим данные! Отправь голосовое или напиши текстом:\n'
+                'Кто ты, где и что снимаешь, цены и над чем работаешь?\n/cancel — отмена.'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text in ['/знания', '/knowledge']:
+            self.api.send(chat_id, (
+                '📚 Загрузка материалов в базу знаний:\n\n'
+                'Отправь мне файл (PDF, DOCX, PPTX, видео, аудио) — '
+                'я изучу его и буду учитывать в ответах!'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text in ['/library', '/библиотека', '/biblioteka']:
+            self.state.put(f'category:{self.owner}', 'library')
+            self.api.send(chat_id, (
+                '📚 Библиотека промптов\n\n'
+                'Готовые промпты для любой задачи. Выбери категорию:'
+            ), keyboard=KEYBOARD_LIBRARY)
+            return None
+
+        if text in ['/uroki', '/уроки', '/urok']:
+            idx = int(self.state.get(f'lesson_idx:{self.owner}') or 0)
+            lesson = MINI_LESSONS[idx % len(MINI_LESSONS)]
+            self.state.put(f'lesson_idx:{self.owner}', str((idx + 1) % len(MINI_LESSONS)))
+            total = len(MINI_LESSONS)
+            self.api.send(chat_id, (
+                f'🎓 {lesson["title"]} ({idx + 1}/{total})\n\n{lesson["body"]}\n\n'
+                f'Следующий урок: /uroki'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        if text in ['/help', '/помощь', '/pomosh']:
+            self.api.send(chat_id, (
+                '📌 Команды:\n\n'
+                '/start — запуск бота\n'
+                '/profile — мой профиль\n'
+                '/brief — обновить профиль\n'
+                '/library — библиотека промптов\n'
+                '/uroki — мини-уроки по работе с ИИ\n'
+                '/reset — сбросить профиль\n'
+                '/знания — загрузить материал (ПДФ, видео)\n'
+                '/cancel — отмена ввода\n\n'
+                '🎛️ Разделы в меню:\n'
+                '✍️ Контент | 💰 Продажи | 📸 Съемки | 📢 Продвижение'
+            ), keyboard=KEYBOARD_MAIN)
+            return None
+
+        # ---------------------------------------------------------------- #
+        # MEDIA HANDLING
+        # ---------------------------------------------------------------- #
+        local = None
+        try:
+            voice = message.get('voice') or message.get('audio')
+            if voice:
+                from src.brain.knowledge.extractors.audio_extractor import AudioExtractor
+                import tempfile
+                suffix = '.ogg' if message.get('voice') else (
+                    Path(voice.get('file_name', 'voice.mp3')).suffix or '.mp3'
+                )
+                local = self.api.download(voice, suffix)
+                with tempfile.TemporaryDirectory(prefix='brain-voice-') as derived:
+                    result = AudioExtractor().extract(local, str(uuid.uuid4()), Path(derived))
+                if not result.success or not result.raw_text.strip():
+                    return 'Не удалось распознать речь. Проверь запись звука и повтори.'
+                text = (caption + '\n' + result.raw_text).strip()
+
+            # Onboarding session
+            session = self.state.get(session_key)
+            if session == 'freeform' and text:
+                res = profile.extract_profile_from_freeform(text)
+                if res.get('is_complete'):
+                    self.state.put(session_key, None)
+                return res['friendly_summary']
+
+            if session and session != 'freeform' and text:
+                result = profile.answer_onboarding(session, text)
+                if result.get('completed'):
+                    self.state.put(session_key, None)
+                    return 'Профиль сохранён! Теперь приступим к первой задаче.'
+                return result['next_question']['question']
+
+            # Documents / video → knowledge base
+            document = message.get('document') or message.get('video')
+            if document:
+                from src.brain.knowledge.factory import KnowledgeIngestionFactory
+                filename = document.get('file_name') or (
+                    'video.mp4' if message.get('video') else 'document.bin'
+                )
+                local = self.api.download(document, Path(filename).suffix.lower())
+                source, chunks = KnowledgeIngestionFactory().ingest_file(local, title=filename)
+                return (
+                    f'✅ Материал добавлен в базу знаний: *{filename}*\n'
+                    f'Обработано фрагментов: {len(chunks)}\n'
+                    'Теперь я учитываю эти знания во всех ответах!'
+                )
+
+            # Photos
+            images = None
+            if message.get('photo'):
+                local = self.api.download(message['photo'][-1], '.jpg')
+                images = [str(local)]
+                c_low = (caption or '').lower()
+                if any(w in c_low for w in ['профиль', 'аккаунт', 'шапк', 'лент', 'сетк', 'инста', 'хайлайт', 'аудит']):
+                    text = caption or 'Сделай детальный аудит профиля и ленты по скриншоту.'
+                elif any(w in c_low for w in ['спор', 'конфликт', 'клиент', 'переписк', 'претензи', 'диалог']):
+                    text = caption or 'Помоги разобрать диалог с клиентом на скриншоте.'
+                elif any(w in c_low for w in ['прайс', 'цена', 'стоимость', 'тариф']):
+                    text = caption or 'Помоги составить прайс-лист по трём тарифам.'
+                else:
+                    text = caption or 'Разбери эту фотографию по 5 аспектам: свет, композиция, поза, цвет, техника.'
+
+            if not text:
+                return 'Пришли текст, голосовое, фото или документ.'
+
+            query = ACTIONS.get(text, text)
+            result = process_request(
+                self.brain, query, UPLOADS,
+                images=images,
+                conversation_history=self.state.get(f'history:{self.owner}', []),
+            )
+            self.state.remember(self.owner, query, result['response'])
+            return result['response']
+
+        finally:
+            if local:
+                local.unlink(missing_ok=True)
+
+
+def run_polling():
+    if not TELEGRAM_BOT_TOKEN:
+        raise RuntimeError('Set TELEGRAM_BOT_TOKEN in .env before starting.')
+    from src.brain.services.brain_service import BrainService
+
+    state = RuntimeState(DATA_DIR / 'telegram_runtime.db')
+    owner = os.environ.get('TELEGRAM_OWNER_ID', '').strip()
+    if not owner.isdigit():
+        stored = state.get('owner_id')
+        if stored and str(stored).isdigit():
+            owner = str(stored)
+        else:
+            owner = ''
+
+    api = TelegramHTTP(TELEGRAM_BOT_TOKEN)
+    bot = Bot(api, BrainService(), state, owner)
+
+    # Start reminder scheduler
+    reminder = ReminderScheduler(api, state, owner)
+    reminder.start()
+
+    stop = threading.Event()
+
+    def worker():
+        while not stop.is_set():
+            pending = state.next_update()
+            if not pending:
+                stop.wait(0.5)
+                continue
+            ident, update, attempts = pending
+            try:
+                cache_key = f'reply:{ident}'
+                reply = state.get(cache_key)
+                if reply is None:
+                    msg = update.get('message', {})
+                    chat_id = (
+                        msg.get('chat', {}).get('id')
+                        or msg.get('from', {}).get('id')
+                        or (int(bot.owner) if bot.owner else None)
+                    )
+                    typing_stop = threading.Event()
+                    if chat_id:
+                        threading.Thread(
+                            target=api.typing_loop,
+                            args=(chat_id, typing_stop),
+                            daemon=True,
+                        ).start()
+                    try:
+                        reply = bot.reply(msg)
+                        if reply is None:
+                            state.finish(ident, True)
+                            state.put(cache_key, '')
+                            continue
+                    except (ValueError, RuntimeError) as exc:
+                        reply = str(exc)
+                    except Exception:
+                        log.error('Processing failed for update %s', ident)
+                        reply = 'Не удалось обработать запрос. Проверь настройки и повтори.'
+                    finally:
+                        typing_stop.set()
+                    state.put(cache_key, reply)
+
+                if reply and bot.owner:
+                    kb = bot._current_keyboard()
+                    api.send(bot.owner, reply, keyboard=kb)
+                state.finish(ident, True)
+                state.put(cache_key, '')
+            except Exception:
+                state.finish(ident, False)
+                log.error('Delivery failed for update %s (attempt %s)', ident, attempts + 1)
+
+    thread = threading.Thread(target=worker, name='brain-worker', daemon=True)
+    thread.start()
+    log.info('Brain Telegram bot v3 started (Yaishka-style).')
+
+    try:
+        while not stop.is_set():
+            try:
+                updates = api.call('getUpdates', {
+                    'offset': state.get('offset', 0),
+                    'timeout': 25,
+                    'allowed_updates': ['message'],
+                })
+                for update in updates:
+                    msg = update.get('message', {})
+                    if not bot.owner:
+                        sender_id = msg.get('from', {}).get('id')
+                        if msg.get('chat', {}).get('type') == 'private' and sender_id:
+                            bot.owner = str(sender_id)
+                            state.put('owner_id', bot.owner)
+                            reminder.owner = bot.owner
+                            log.info('Auto-registered owner: %s', bot.owner)
+                    if not owner_allowed(msg, bot.owner):
+                        update = {'update_id': update['update_id']}
+                    state.enqueue(update)
+                if updates:
+                    state.put('offset', updates[-1]['update_id'] + 1)
+            except Exception:
+                log.error('Polling error; retrying in 3s...')
+                stop.wait(3)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        stop.set()
+        reminder.stop()
+        thread.join(timeout=10)
+        log.info('Bot stopped.')
+
+
+if __name__ == '__main__':
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
+    )
+    run_polling()

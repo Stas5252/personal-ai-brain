@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from scripts.seed_vetted_knowledge import KNOWLEDGE_DIR, VETTED_FILES, validate_corpus
+from scripts.seed_vetted_knowledge import KNOWLEDGE_DIR, CORE_FILES as VETTED_FILES, core_paths as validate_corpus
 
 
 def test_vetted_corpus_is_complete_and_original():
