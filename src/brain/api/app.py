@@ -81,9 +81,11 @@ def ready():
         finally:
             db.close()
         storage = UPLOAD_ROOT.is_dir()
-        return JSONResponse({'status': 'ready' if storage else 'degraded', 'database': True,
-                             'storage': storage, 'model_key_configured': bool(GEMINI_API_KEY),
-                             'model_live_check': 'not_run'}, status_code=200 if storage else 503)
+        model_configured = bool(GEMINI_API_KEY)
+        service_ready = storage and model_configured
+        return JSONResponse({'status': 'ready' if service_ready else 'degraded', 'database': True,
+                             'storage': storage, 'model_key_configured': model_configured,
+                             'model_live_check': 'not_run'}, status_code=200 if service_ready else 503)
     except Exception:
         return JSONResponse({'status': 'degraded', 'database': False}, status_code=503)
 
