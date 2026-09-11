@@ -76,7 +76,7 @@ jobs:
               raise SystemExit('Gemini image smoke returned an invalid file')
 
           request = urllib.request.Request(
-              f'https://api.telegram.org/bot{telegram}/getMe',
+              'https://api.telegram.org/bot' + telegram + '/getMe',
               method='GET',
           )
           with urllib.request.urlopen(request, timeout=20) as response:
