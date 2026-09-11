@@ -13,6 +13,7 @@ from src.brain.models.client import Client
 from src.brain.models.project import Project
 from src.brain.models.style import StyleProfile
 from src.brain.models.context import ContextItem, ContextType, AssembledContext
+from src.brain.engines.memory_engine import recency_score
 
 class ContextEngine:
     def __init__(self):
@@ -101,6 +102,8 @@ class ContextEngine:
             )
 
         # 5. Memories
+        # recency берётся из реальных дат записи: раньше здесь стояла константа 1.0,
+        # из-за чего вес свежести в ранжировании не работал вообще.
         context_memories = []
         for m, score in memories:
             context_memories.append(ContextItem(
@@ -111,11 +114,13 @@ class ContextEngine:
                 score=score,
                 relevance=score,
                 importance=m.importance,
-                recency=1.0,
+                recency=recency_score(m.created_at, m.updated_at),
                 metadata={"source": m.source}
             ))
 
         # 6. Knowledge Chunks & Traces
+        # У материалов курса даты индексации не означают устаревание методики,
+        # поэтому свежесть здесь намеренно нейтральная.
         context_knowledge = []
         traces = []
         for chunk, score, trace in knowledge:

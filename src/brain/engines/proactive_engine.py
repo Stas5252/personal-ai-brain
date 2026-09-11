@@ -2,27 +2,112 @@
 Proactive and Daily Planning Assistant for Personal AI Brain.
 Provides intelligent schedule analysis ("Что мне сегодня делать?"),
 task prioritization, and contextual proactive nudges with quiet-hours policy.
+
+Every self-initiated message now passes through src.brain.engines.outreach_policy:
+quiet hours in her timezone, one touch at a time, no more than four in two
+weeks, and never the same reminder twice inside two weeks. Before that the
+engine rebuilt a nudge on every call and kept no record of what it had already
+sent, so nothing prevented it from repeating itself.
 """
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List, Optional
 
+from src.brain.engines.outreach_policy import OutreachLedger, decide, within_quiet_hours
 from src.brain.models.profile import UserProfile
 from src.brain.models.client import Client, ClientStatus
 from src.brain.models.project import Project, ProjectStatus
 from src.brain.models.task import Task, TaskStatus, TaskPriority
 
 class ProactiveEngine:
-    def __init__(self, enabled: bool = True, quiet_hours_start: int = 22, quiet_hours_end: int = 9):
+    def __init__(self, enabled: bool = True, quiet_hours_start: int = 22, quiet_hours_end: int = 9,
+                 tz_offset_hours: Optional[float] = None, ledger: Optional[OutreachLedger] = None):
         self.enabled = enabled
         self.quiet_hours_start = quiet_hours_start
         self.quiet_hours_end = quiet_hours_end
+        self.tz_offset_hours = tz_offset_hours
+        self.ledger = ledger if ledger is not None else OutreachLedger()
+        # Причина последнего запрета — чтобы молчание бота можно было объяснить,
+        # а не гадать, почему касания не приходят.
+        self.last_block_reason: Optional[str] = None
+
+    def _local_hour(self) -> int:
+        """Her hour, not the server's.
+
+        The container clock is UTC, so a 22:00-09:00 quiet window was silencing
+        the bot at the wrong time of her day. BRAIN_TZ_OFFSET_HOURS (or the
+        tz_offset_hours argument) fixes it; without either one the previous
+        local-time behaviour is kept exactly as it was.
+        """
+        offset = self.tz_offset_hours
+        if offset is None:
+            raw = os.getenv("BRAIN_TZ_OFFSET_HOURS", "").strip()
+            if raw:
+                try:
+                    offset = float(raw)
+                except ValueError:
+                    offset = None
+        if offset is None:
+            return datetime.now().hour
+        return int((datetime.now(timezone.utc) + timedelta(hours=offset)).hour)
 
     def is_quiet_hours(self, current_hour: Optional[int] = None) -> bool:
-        if current_hour is None:
-            current_hour = datetime.now().hour
-        if self.quiet_hours_start > self.quiet_hours_end:
-            return current_hour >= self.quiet_hours_start or current_hour < self.quiet_hours_end
-        return self.quiet_hours_start <= current_hour < self.quiet_hours_end
+        hour = self._local_hour() if current_hour is None else int(current_hour)
+        return within_quiet_hours(hour, self.quiet_hours_start, self.quiet_hours_end)
+
+    # -- outreach limits ---------------------------------------------------
+    def outreach_history(self) -> List[Dict[str, Any]]:
+        """What the bot has already sent on its own initiative."""
+        try:
+            return self.ledger.history()
+        except Exception:
+            return []
+
+    def outreach_summary(self) -> Dict[str, Any]:
+        try:
+            return self.ledger.summary()
+        except Exception:
+            return {}
+
+    def note_owner_reply(self) -> int:
+        """Her answer closes the open touch, so proactivity may continue."""
+        try:
+            return self.ledger.mark_answered()
+        except Exception:
+            return 0
+
+    def _precheck(self) -> bool:
+        """Type-independent limits, checked before any LLM call is paid for."""
+        allowed, reason = decide(
+            "__precheck__",
+            self.outreach_history(),
+            quiet_hour=self._local_hour(),
+            quiet_start=self.quiet_hours_start,
+            quiet_end=self.quiet_hours_end,
+        )
+        self.last_block_reason = None if allowed else reason
+        return allowed
+
+    def _release(self, nudge: Dict[str, Any], enforce_policy: bool = True) -> Optional[Dict[str, Any]]:
+        """Releases one touch and writes it down, or blocks it with a reason."""
+        if not enforce_policy:
+            return nudge
+        allowed, reason = decide(
+            nudge.get("type"),
+            self.outreach_history(),
+            quiet_hour=self._local_hour(),
+            quiet_start=self.quiet_hours_start,
+            quiet_end=self.quiet_hours_end,
+        )
+        if not allowed:
+            self.last_block_reason = reason
+            return None
+        self.last_block_reason = None
+        try:
+            self.ledger.record(nudge.get("type"), nudge.get("message"))
+        except Exception:
+            pass
+        return nudge
 
     def generate_daily_plan(
         self,
@@ -38,6 +123,9 @@ class ProactiveEngine:
         """
         from src.brain.db import get_connection
         import json
+
+        # Она сама пришла за планом — открытое касание считается закрытым.
+        self.note_owner_reply()
 
         # 1. Fetch real active projects from DB if not provided
         if projects is None:
@@ -211,12 +299,20 @@ class ProactiveEngine:
         self,
         recent_event: str,
         profile: Optional[UserProfile] = None,
-        use_llm: bool = True
+        use_llm: bool = True,
+        enforce_policy: bool = True
     ) -> Optional[Dict[str, Any]]:
         """
         Generates context-aware proactivity (e.g. after a shoot, client ghosting, or idle content pause).
+
+        The outreach limits are applied twice: once before any LLM call, so a
+        blocked nudge costs nothing, and once on the exact nudge that is about
+        to be released, which is also when it is written to the ledger.
+        Pass enforce_policy=False only to preview a nudge without sending it.
         """
         if not self.enabled or self.is_quiet_hours():
+            return None
+        if enforce_policy and not self._precheck():
             return None
 
         event_lower = recent_event.lower().replace("ё", "е")
@@ -263,11 +359,11 @@ class ProactiveEngine:
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                     parsed = json.loads(clean)
                     if isinstance(parsed, dict) and parsed.get("message"):
-                        return {
+                        return self._release({
                             "type": parsed.get("nudge_type", "DYNAMIC_EVENT_NUDGE"),
                             "message": parsed["message"],
                             "suggested_action": parsed.get("suggested_action")
-                        }
+                        }, enforce_policy)
             except Exception:
                 pass
 
@@ -289,16 +385,16 @@ class ProactiveEngine:
                 )
                 code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
                 if code == 200 and len(text.strip()) > 20 and not text.strip().startswith("Тестовый ответ"):
-                    return {
+                    return self._release({
                         "type": nudge_type,
                         "message": text.strip().strip('"\''),
                         "suggested_action": suggested_action
-                    }
+                    }, enforce_policy)
             except Exception:
                 pass
 
-        return {
+        return self._release({
             "type": nudge_type,
             "message": base_msg,
             "suggested_action": suggested_action
-        }
+        }, enforce_policy)

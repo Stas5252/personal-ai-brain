@@ -48,11 +48,11 @@ def _service():
         ("15000", 15000),
         ("15 000 \u20bd", 15000),
         ("15\u00a0000 \u20bd", 15000),
-        ("15к", 15000),
-        ("цена 12 тыс", 12000),
-        ("от 8000 руб", 8000),
-        ("базовая 15000, премиум 30000", 15000),
-        ("900 или 30000 \u20bd", 30000),
+        ("15\u043a", 15000),
+        ("\u0446\u0435\u043d\u0430 12 \u0442\u044b\u0441", 12000),
+        ("\u043e\u0442 8000 \u0440\u0443\u0431", 8000),
+        ("\u0431\u0430\u0437\u043e\u0432\u0430\u044f 15000, \u043f\u0440\u0435\u043c\u0438\u0443\u043c 30000", 15000),
+        ("900 \u0438\u043b\u0438 30000 \u20bd", 30000),
     ],
 )
 def test_parse_base_price_reads_what_the_user_typed(text, expected):
@@ -64,9 +64,9 @@ def test_parse_base_price_reads_what_the_user_typed(text, expected):
     [
         "",
         "   ",
-        "не помню точно",
-        "пиши на 89991234567",
-        "съёмка 10.09.2026",
+        "\u043d\u0435 \u043f\u043e\u043c\u043d\u044e \u0442\u043e\u0447\u043d\u043e",
+        "\u043f\u0438\u0448\u0438 \u043d\u0430 89991234567",
+        "\u0441\u044a\u0451\u043c\u043a\u0430 10.09.2026",
         str(MIN_REASONABLE_PRICE - 200),
         str(MAX_REASONABLE_PRICE + 1000),
     ],
@@ -83,12 +83,12 @@ def test_format_money_uses_a_non_breaking_separator():
 
 def test_price_list_asks_instead_of_inventing_a_base():
     with pytest.raises(MissingActionInput) as excinfo:
-        _service().execute("sales.price", _FakeBrain(), text="хочу прайс на свадьбы")
+        _service().execute("sales.price", _FakeBrain(), text="\u0445\u043e\u0447\u0443 \u043f\u0440\u0430\u0439\u0441 \u043d\u0430 \u0441\u0432\u0430\u0434\u044c\u0431\u044b")
     assert "15000" in str(excinfo.value)
 
 
 def test_price_list_is_built_from_the_stated_base():
-    result = _service().execute("sales.price", _FakeBrain(), text="базовая 15000 \u20bd")
+    result = _service().execute("sales.price", _FakeBrain(), text="\u0431\u0430\u0437\u043e\u0432\u0430\u044f 15000 \u20bd")
     data = result["data"]
     assert data["base_price"] == format_money(15000)
     assert [tier["price"] for tier in data["tiers"]] == [
@@ -100,22 +100,26 @@ def test_price_list_is_built_from_the_stated_base():
     assert "20 000" not in result["markdown"].replace("\u00a0", " ")
 
 
-def test_thirty_two_guided_actions_stay_unique():
+def test_guided_action_ids_stay_unique():
+    # The old name hard-coded 32 and the registry has outgrown that number
+    # twice since, so the test failed for a bookkeeping reason instead of a
+    # product one. Uniqueness is the rule worth guarding: a duplicate id is
+    # silently swallowed by ACTION_BY_ID and one button stops answering.
     ids = [action.action_id for action in ACTIONS]
-    assert len(ids) == 32
-    assert len(set(ids)) == 32
+    assert len(set(ids)) == len(ids)
+    assert len(ids) >= 32
 
 
 @pytest.mark.parametrize(
     "forms",
     [
-        ("возражение", "возражения", "возражений", "возражением", "возражениями"),
-        ("цена", "цены", "цену", "ценой"),
-        ("ценность", "ценности"),
-        ("клиент", "клиенты", "клиентов", "клиентам"),
-        ("пост", "посты", "постов"),
-        ("закрывать", "закрываем"),
-        ("дорого", "дорогой"),
+        ("\u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u0435", "\u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u044f", "\u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u0439", "\u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u0435\u043c", "\u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u044f\u043c\u0438"),
+        ("\u0446\u0435\u043d\u0430", "\u0446\u0435\u043d\u044b", "\u0446\u0435\u043d\u0443", "\u0446\u0435\u043d\u043e\u0439"),
+        ("\u0446\u0435\u043d\u043d\u043e\u0441\u0442\u044c", "\u0446\u0435\u043d\u043d\u043e\u0441\u0442\u0438"),
+        ("\u043a\u043b\u0438\u0435\u043d\u0442", "\u043a\u043b\u0438\u0435\u043d\u0442\u044b", "\u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432", "\u043a\u043b\u0438\u0435\u043d\u0442\u0430\u043c"),
+        ("\u043f\u043e\u0441\u0442", "\u043f\u043e\u0441\u0442\u044b", "\u043f\u043e\u0441\u0442\u043e\u0432"),
+        ("\u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0442\u044c", "\u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0435\u043c"),
+        ("\u0434\u043e\u0440\u043e\u0433\u043e", "\u0434\u043e\u0440\u043e\u0433\u043e\u0439"),
     ],
 )
 def test_inflected_forms_share_one_stem(forms):
@@ -123,39 +127,39 @@ def test_inflected_forms_share_one_stem(forms):
 
 
 def test_yo_is_folded():
-    assert stem("съёмка") == stem("съемка")
+    assert stem("\u0441\u044a\u0451\u043c\u043a\u0430") == stem("\u0441\u044a\u0435\u043c\u043a\u0430")
 
 
 def test_stopwords_and_digits_are_dropped():
-    assert tokenize("как и что") == set()
-    assert tokenize("урок 2026") == {stem("урок")}
+    assert tokenize("\u043a\u0430\u043a \u0438 \u0447\u0442\u043e") == set()
+    assert tokenize("\u0443\u0440\u043e\u043a 2026") == {stem("\u0443\u0440\u043e\u043a")}
 
 
 def test_inflected_question_matches_the_lesson():
     # This is the regression: every content word here is inflected differently
     # in the lesson, and the old word-set comparison scored it 0.25.
     score = lexical_score(
-        "как закрывать возражение дорого",
-        "Скрипт: закрываем возражения \u00abдорого\u00bb через ценность",
+        "\u043a\u0430\u043a \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0442\u044c \u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u0434\u043e\u0440\u043e\u0433\u043e",
+        "\u0421\u043a\u0440\u0438\u043f\u0442: \u0437\u0430\u043a\u0440\u044b\u0432\u0430\u0435\u043c \u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u044f \u00ab\u0434\u043e\u0440\u043e\u0433\u043e\u00bb \u0447\u0435\u0440\u0435\u0437 \u0446\u0435\u043d\u043d\u043e\u0441\u0442\u044c",
     )
     assert score >= 0.99
 
 
 def test_unrelated_text_scores_zero():
-    assert lexical_score("подбор музыки", "договор аренды студии") == 0.0
-    assert lexical_score("", "что угодно") == 0.0
+    assert lexical_score("\u043f\u043e\u0434\u0431\u043e\u0440 \u043c\u0443\u0437\u044b\u043a\u0438", "\u0434\u043e\u0433\u043e\u0432\u043e\u0440 \u0430\u0440\u0435\u043d\u0434\u044b \u0441\u0442\u0443\u0434\u0438\u0438") == 0.0
+    assert lexical_score("", "\u0447\u0442\u043e \u0443\u0433\u043e\u0434\u043d\u043e") == 0.0
 
 
 def test_exact_phrase_scores_highest():
-    assert lexical_score("товарная линейка", "Урок: товарная линейка фотографа") == 0.95
+    assert lexical_score("\u0442\u043e\u0432\u0430\u0440\u043d\u0430\u044f \u043b\u0438\u043d\u0435\u0439\u043a\u0430", "\u0423\u0440\u043e\u043a: \u0442\u043e\u0432\u0430\u0440\u043d\u0430\u044f \u043b\u0438\u043d\u0435\u0439\u043a\u0430 \u0444\u043e\u0442\u043e\u0433\u0440\u0430\u0444\u0430") == 0.95
 
 
 @pytest.mark.parametrize(
     "question,topic",
     [
-        ("как отвечать на возражение дорого", "sales"),
-        ("идеи для сторис", "content"),
-        ("как организовать фотодень", "business"),
+        ("\u043a\u0430\u043a \u043e\u0442\u0432\u0435\u0447\u0430\u0442\u044c \u043d\u0430 \u0432\u043e\u0437\u0440\u0430\u0436\u0435\u043d\u0438\u0435 \u0434\u043e\u0440\u043e\u0433\u043e", "sales"),
+        ("\u0438\u0434\u0435\u0438 \u0434\u043b\u044f \u0441\u0442\u043e\u0440\u0438\u0441", "content"),
+        ("\u043a\u0430\u043a \u043e\u0440\u0433\u0430\u043d\u0438\u0437\u043e\u0432\u0430\u0442\u044c \u0444\u043e\u0442\u043e\u0434\u0435\u043d\u044c", "business"),
     ],
 )
 def test_questions_route_to_corpus_topics(question, topic):

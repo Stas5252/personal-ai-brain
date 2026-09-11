@@ -289,6 +289,10 @@ class ProfileEngine:
                 extracted_data["niche"] = m_niche.group(1).strip()
 
         current = self.get_profile()
+        # The extraction prompt never returns visual, content, sales or brand
+        # preferences, so those are carried over from the stored profile.
+        # Rebuilding the model without them used to silently erase the visual
+        # style that image generation reads and the forbidden topics list.
         updated = UserProfile(
             identity=extracted_data.get("identity") or current.identity,
             profession="Фотограф",
@@ -301,8 +305,15 @@ class ProfileEngine:
             audience=extracted_data.get("audience") or current.audience,
             clients=extracted_data.get("audience") or current.clients,
             goals=extracted_data.get("goals") or current.goals,
-            business_stage="Действующий коммерческий фотограф",
+            business_stage=current.business_stage or "Действующий коммерческий фотограф",
             tone=extracted_data.get("tone") or current.tone or "Теплый, поддерживающий, профессиональный",
+            language=current.language,
+            preferred_models=current.preferred_models,
+            content_preferences=current.content_preferences,
+            sales_preferences=current.sales_preferences,
+            visual_preferences=current.visual_preferences,
+            brand_preferences=current.brand_preferences,
+            forbidden_topics=current.forbidden_topics,
             forbidden_words=extracted_data.get("forbidden_words") or current.forbidden_words,
             updated_at=datetime.now(timezone.utc).isoformat()
         )

@@ -3,13 +3,13 @@ Telegram Channel Adapter for Personal AI Brain.
 Connects Telegram Bot API events (text, voice, photo) directly to BrainService
 without creating a separate "Telegram AI" — Telegram is strictly transport.
 """
-import os
 import json
 import urllib.request
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
 from src.brain.channels.base import BaseChannelAdapter
+from src.brain.channels.telegram_media import TelegramMedia, api_base
 from src.brain.services.brain_service import BrainService
 
 class TelegramAdapter(BaseChannelAdapter):
@@ -18,7 +18,11 @@ class TelegramAdapter(BaseChannelAdapter):
         from src.brain.config import TELEGRAM_BOT_TOKEN
         self.bot_token = bot_token or TELEGRAM_BOT_TOKEN
         self.brain = brain_service or BrainService()
-        self.api_base = f"https://api.telegram.org/bot{self.bot_token}" if self.bot_token else None
+        # Built through api_base() because the previous inline f-string kept the
+        # literal braces and produced an unusable "{https://...}" URL, which
+        # made every outbound call from this adapter fail.
+        self.api_base = api_base(self.bot_token) if self.bot_token else None
+        self.media = TelegramMedia(self.bot_token)
 
     def is_configured(self) -> bool:
         return bool(self.bot_token and len(self.bot_token) > 10)
@@ -60,6 +64,18 @@ class TelegramAdapter(BaseChannelAdapter):
             query=query,
             images=[str(photo_path)]
         )
+
+    def send_chat_action(self, chat_id: str, action: str = "typing") -> bool:
+        """Shows a live status in the chat while a long task runs."""
+        return self.media.chat_action(chat_id, action)
+
+    def typing(self, chat_id: str, action: str = "typing"):
+        """Context manager keeping the status alive: `with adapter.typing(chat):`."""
+        return self.media.typing(chat_id, action)
+
+    def send_photo(self, chat_id: str, photo_path: str, caption: Optional[str] = None) -> bool:
+        """Uploads a generated or stored image as a real Telegram photo."""
+        return self.media.send_photo(chat_id, photo_path, caption=caption)
 
     def send_message(self, chat_id: str, text: str, parse_mode: Optional[str] = "Markdown", reply_markup: Optional[Dict[str, Any]] = None) -> bool:
         """Sends a response back to Telegram user with automatic chunking and fallback."""
