@@ -11,42 +11,39 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
-      - name: Build production image
-        run: docker build --pull -t personal-ai-brain:live-audit .
+      - run: docker build --pull -t personal-ai-brain:live-audit .
 
-  live-providers:
+  gemini-secret:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     env:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+    steps:
+      - run: test -n "$GEMINI_API_KEY" || { echo 'GEMINI_API_KEY GitHub Actions secret is not configured'; exit 1; }
+
+  telegram-secret:
+    runs-on: ubuntu-latest
+    env:
       TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-      BRAIN_DATA_DIR: /tmp/brain-live-audit
+    steps:
+      - run: test -n "$TELEGRAM_BOT_TOKEN" || { echo 'TELEGRAM_BOT_TOKEN GitHub Actions secret is not configured'; exit 1; }
+
+  gemini-text:
+    needs: gemini-secret
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      BRAIN_DATA_DIR: /tmp/brain-live-text
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install runtime
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          pip check
-      - name: Verify real Gemini text, Gemini image, and Telegram bot identity
+      - run: pip install -r requirements.txt
+      - name: Real Gemini text completion
         run: |
           python - <<'PY'
-          import json
-          import os
-          import urllib.request
-          from pathlib import Path
-
-          gemini = os.environ.get('GEMINI_API_KEY', '').strip()
-          telegram = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
-          if not gemini:
-              raise SystemExit('GEMINI_API_KEY GitHub Actions secret is not configured')
-          if not telegram:
-              raise SystemExit('TELEGRAM_BOT_TOKEN GitHub Actions secret is not configured')
-
           from src.brain.services.llm_provider import LLMProvider
           code, text, _latency, model = LLMProvider().chat_completion(
               [{'role': 'user', 'content': 'Ответь ровно: LIVE_TEXT_OK'}],
@@ -55,11 +52,32 @@ jobs:
           )
           if code != 200 or 'LIVE_TEXT_OK' not in (text or ''):
               raise SystemExit(f'Gemini text smoke failed: status={code}, model={model}')
+          print('LIVE_TEXT_OK', model)
+          PY
 
+  gemini-image:
+    needs: gemini-secret
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      BRAIN_DATA_DIR: /tmp/brain-live-image-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Real Gemini image generation
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
           from src.brain.engines.image_engine import ImageEngine, STATUS_AVAILABLE, _looks_like_image
           output = Path('/tmp/brain-live-image')
           result = ImageEngine(
-              api_key=gemini,
+              api_key=os.environ['GEMINI_API_KEY'],
               output_dir=output,
               models=['gemini-2.5-flash-image'],
               timeout=120,
@@ -74,17 +92,26 @@ jobs:
           raw = image.read_bytes()
           if not raw or not _looks_like_image(raw):
               raise SystemExit('Gemini image smoke returned an invalid file')
+          print('LIVE_IMAGE_OK', image.suffix, len(raw), result.get('model'))
+          PY
 
-          request = urllib.request.Request(
-              'https://api.telegram.org/bot' + telegram + '/getMe',
-              method='GET',
-          )
-          with urllib.request.urlopen(request, timeout=20) as response:
+  telegram-getme:
+    needs: telegram-secret
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+    steps:
+      - name: Real Telegram bot identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          url = 'https://api.telegram.org/bot' + os.environ['TELEGRAM_BOT_TOKEN'] + '/getMe'
+          with urllib.request.urlopen(url, timeout=20) as response:
               payload = json.load(response)
           if not payload.get('ok') or not (payload.get('result') or {}).get('id'):
               raise SystemExit('Telegram getMe smoke failed')
-
-          print('LIVE_TEXT_OK')
-          print('LIVE_IMAGE_OK', image.suffix, len(raw), result.get('model'))
           print('LIVE_TELEGRAM_OK')
           PY
