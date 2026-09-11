@@ -32,7 +32,7 @@ import uuid
 from pathlib import Path
 
 import src.brain.channels.telegram_runner as legacy
-from src.brain.channels.runtime_state import owner_allowed
+from src.brain.channels.runtime_state import owner_allowed, process_request
 from src.brain.channels.task_queue import SerialWorker
 from src.brain.channels.telegram_media import CAPTION_LIMIT, TelegramMedia, sanitize_markdown, split_message
 from src.brain.channels.telegram_ratelimit import limiter
@@ -523,7 +523,7 @@ class GuidedBot(legacy.Bot):
             if not text and not image: return None
             query=text or PHOTO_HINT
             with self.media.typing(chat,"upload_photo" if image else "typing"):
-                result=self.brain.process_chat(query=query,conversation_history=self._history(),images=[image] if image else None)
+                result=process_request(self.brain,query,legacy.UPLOADS,images=[image] if image else None,conversation_history=self._history())
             answer=(result.get("response") or "").strip()
             if not answer: return "Модель вернула пустой ответ. Повтори запрос или уточни задачу."
             answer=self._style_guard(answer,result.get("style_benchmark") or {})
