@@ -1,0 +1,90 @@
+name: Live production smoke audit
+on:
+  push:
+    branches: [fix/live-production-smoke-audit]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  container-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --pull -t personal-ai-brain:live-audit .
+
+  live-providers:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      BRAIN_DATA_DIR: /tmp/brain-live-audit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install runtime
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip check
+      - name: Verify real Gemini text, Gemini image, and Telegram bot identity
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import urllib.request
+          from pathlib import Path
+
+          gemini = os.environ.get('GEMINI_API_KEY', '').strip()
+          telegram = os.environ.get('TELEGRAM_BOT_TOKEN', '').strip()
+          if not gemini:
+              raise SystemExit('GEMINI_API_KEY GitHub Actions secret is not configured')
+          if not telegram:
+              raise SystemExit('TELEGRAM_BOT_TOKEN GitHub Actions secret is not configured')
+
+          from src.brain.services.llm_provider import LLMProvider
+          code, text, _latency, model = LLMProvider().chat_completion(
+              [{'role': 'user', 'content': 'Ответь ровно: LIVE_TEXT_OK'}],
+              preferred_model='gemini-2.5-flash',
+              temperature=0,
+          )
+          if code != 200 or 'LIVE_TEXT_OK' not in (text or ''):
+              raise SystemExit(f'Gemini text smoke failed: status={code}, model={model}')
+
+          from src.brain.engines.image_engine import ImageEngine, STATUS_AVAILABLE, _looks_like_image
+          output = Path('/tmp/brain-live-image')
+          result = ImageEngine(
+              api_key=gemini,
+              output_dir=output,
+              models=['gemini-2.5-flash-image'],
+              timeout=120,
+          ).generate(
+              'Нейтральный натюрморт: белая керамическая чашка на деревянном столе, мягкий свет из окна, без людей, текста, логотипов и водяных знаков.',
+              use_llm=False,
+              qa_retry=False,
+          )
+          if result.get('status') != STATUS_AVAILABLE:
+              raise SystemExit('Gemini image smoke failed: ' + str(result.get('reason') or 'unknown error'))
+          image = Path(result['image_path'])
+          raw = image.read_bytes()
+          if not raw or not _looks_like_image(raw):
+              raise SystemExit('Gemini image smoke returned an invalid file')
+
+          request = urllib.request.Request(
+              f'https://api.telegram.org/bot{telegram}/getMe',
+              method='GET',
+          )
+          with urllib.request.urlopen(request, timeout=20) as response:
+              payload = json.load(response)
+          if not payload.get('ok') or not (payload.get('result') or {}).get('id'):
+              raise SystemExit('Telegram getMe smoke failed')
+
+          print('LIVE_TEXT_OK')
+          print('LIVE_IMAGE_OK', image.suffix, len(raw), result.get('model'))
+          print('LIVE_TELEGRAM_OK')
+          PY
