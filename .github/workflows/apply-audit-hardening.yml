@@ -1,0 +1,57 @@
+name: Apply audit hardening once
+on:
+  push:
+    branches: [fix/post-merge-production-audit]
+permissions:
+  contents: write
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply audited fixes and tests
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          guided = Path('src/brain/channels/telegram_guided_runner.py')
+          text = guided.read_text(encoding='utf-8')
+          old = 'from src.brain.channels.runtime_state import owner_allowed'
+          new = 'from src.brain.channels.runtime_state import owner_allowed, process_request'
+          if old not in text:
+              raise SystemExit('guided import anchor missing')
+          text = text.replace(old, new, 1)
+          old = 'result=self.brain.process_chat(query=query,conversation_history=self._history(),images=[image] if image else None)'
+          new = 'result=process_request(self.brain,query,legacy.UPLOADS,images=[image] if image else None,conversation_history=self._history())'
+          if old not in text:
+              raise SystemExit('guided vision anchor missing')
+          guided.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          app = Path('src/brain/api/app.py')
+          text = app.read_text(encoding='utf-8')
+          old = "        storage = UPLOAD_ROOT.is_dir()\n        return JSONResponse({'status': 'ready' if storage else 'degraded', 'database': True,\n                             'storage': storage, 'model_key_configured': bool(GEMINI_API_KEY),\n                             'model_live_check': 'not_run'}, status_code=200 if storage else 503)"
+          new = "        storage = UPLOAD_ROOT.is_dir()\n        model_configured = bool(GEMINI_API_KEY)\n        service_ready = storage and model_configured\n        return JSONResponse({'status': 'ready' if service_ready else 'degraded', 'database': True,\n                             'storage': storage, 'model_key_configured': model_configured,\n                             'model_live_check': 'not_run'}, status_code=200 if service_ready else 503)"
+          if old not in text:
+              raise SystemExit('readiness anchor missing')
+          app.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          tests = Path('tests/reliability/test_production_honesty.py')
+          tests.write_text('''"""Post-merge checks for production honesty at channel and readiness boundaries."""\nimport json\nfrom contextlib import nullcontext\nfrom pathlib import Path\nfrom types import SimpleNamespace\nfrom unittest.mock import Mock, patch\n\nfrom src.brain.channels.telegram_guided_runner import GuidedBot\n\n\ndef test_guided_freeform_stops_when_live_vision_fails(tmp_path):\n    image = tmp_path / "frame.jpg"\n    image.write_bytes(b"fixture")\n    bot = object.__new__(GuidedBot)\n    bot.brain = Mock()\n    bot.brain.shooting_engine.critique_shot.return_value = {"status": "ERROR"}\n    bot._collect = lambda message, temp: ("Разбери кадр", str(image))\n    bot._history = lambda: []\n    bot.media = SimpleNamespace(typing=lambda *args, **kwargs: nullcontext())\n\n    with patch("src.brain.channels.telegram_guided_runner.legacy.UPLOADS", tmp_path):\n        answer = bot._freeform({}, None)\n\n    assert "анализ изображения недоступен" in answer.lower()\n    bot.brain.process_chat.assert_not_called()\n\n\ndef test_readiness_is_degraded_without_live_model_key():\n    from src.brain.api import app as app_module\n\n    with patch.object(app_module, "GEMINI_API_KEY", ""):\n        response = app_module.ready()\n\n    assert response.status_code == 503\n    payload = json.loads(response.body)\n    assert payload["status"] == "degraded"\n    assert payload["model_key_configured"] is False\n''', encoding='utf-8')
+
+          workflow = Path('.github/workflows/reliability.yml')
+          text = workflow.read_text(encoding='utf-8')
+          anchor = '            tests/brain/test_reference_intake.py \\\n'
+          replacement = anchor + '            tests/reliability/test_production_honesty.py \\\n'
+          if anchor not in text:
+              raise SystemExit('workflow test anchor missing')
+          workflow.write_text(text.replace(anchor, replacement, 1), encoding='utf-8')
+          PY
+      - name: Commit hardened boundaries
+        run: |
+          rm .github/workflows/apply-audit-hardening.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add src/brain/channels/telegram_guided_runner.py src/brain/api/app.py tests/reliability/test_production_honesty.py .github/workflows/reliability.yml .github/workflows/apply-audit-hardening.yml
+          git commit -m 'Harden live vision and readiness honesty'
+          git push
