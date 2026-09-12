@@ -1,10 +1,10 @@
-"""
-Knowledge Models for Hierarchical RAG and Traceability.
-"""
+"""Knowledge models for hierarchical RAG and traceability."""
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
+
 
 class KnowledgeLayer(str, Enum):
     GLOBAL = "GLOBAL"
@@ -14,11 +14,13 @@ class KnowledgeLayer(str, Enum):
     PROJECT = "PROJECT"
     CLIENT = "CLIENT"
 
+
 class HallucinationType(str, Enum):
     GROUNDED = "grounded"
     INFERENCE = "inference"
     GENERAL_KNOWLEDGE = "general_knowledge"
     UNKNOWN = "unknown"
+
 
 class IngestionStatus(str, Enum):
     DISCOVERED = "DISCOVERED"
@@ -36,6 +38,7 @@ class IngestionStatus(str, Enum):
     SKIPPED = "SKIPPED"
     DUPLICATE = "DUPLICATE"
 
+
 class ContentType(str, Enum):
     TEXT = "text"
     TABLE = "table"
@@ -44,12 +47,14 @@ class ContentType(str, Enum):
     TRANSCRIPT = "transcript"
     FUSION = "fusion"
 
+
 class ClassificationMethod(str, Enum):
     RULES = "rules"
     METADATA = "metadata"
     LLM = "llm"
     MANUAL = "manual"
     REVIEW_REQUIRED = "review_required"
+
 
 class KnowledgeSource(BaseModel):
     source_id: str
@@ -64,7 +69,7 @@ class KnowledgeSource(BaseModel):
     modified_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     ingestion_status: IngestionStatus = IngestionStatus.DISCOVERED
     processing_version: str = "v1.0"
-    source_type: str = "document" # document, image, audio, video, url
+    source_type: str = "document"
     layer: KnowledgeLayer = KnowledgeLayer.GLOBAL
     confidence: float = Field(default=0.9, ge=0.0, le=1.0)
     classification_method: ClassificationMethod = ClassificationMethod.RULES
@@ -77,12 +82,13 @@ class KnowledgeSource(BaseModel):
     def status(self) -> IngestionStatus:
         return self.ingestion_status
 
+
 class KnowledgeMetadata(BaseModel):
     source_id: str
     title: str
     author: Optional[str] = "Owner"
     date: str = Field(default_factory=lambda: datetime.now(timezone.utc).strftime("%Y-%m-%d"))
-    type: str = "document"  # document, table, video, audio, image, chat_note
+    type: str = "document"
     category: KnowledgeLayer = KnowledgeLayer.GLOBAL
     subcategory: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
@@ -100,7 +106,8 @@ class KnowledgeMetadata(BaseModel):
     heading_path: Optional[str] = None
     visual_description: Optional[str] = None
     ocr_text: Optional[str] = None
-    is_generated: bool = False # Separation of factual source vs derived AI summary
+    is_generated: bool = False
+
 
 class KnowledgeChunk(BaseModel):
     id: str
@@ -120,6 +127,7 @@ class KnowledgeChunk(BaseModel):
     score: float = 0.0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
+
 class SourceTrace(BaseModel):
     source_id: str
     title: str
@@ -133,6 +141,7 @@ class SourceTrace(BaseModel):
     start_time: Optional[float] = None
     end_time: Optional[float] = None
     timestamp_range: Optional[str] = None
+
 
 class IngestionJob(BaseModel):
     job_id: str
@@ -148,6 +157,7 @@ class IngestionJob(BaseModel):
     worker_id: Optional[str] = None
     lease_until: Optional[str] = None
     heartbeat_at: Optional[str] = None
+    lease_token: int = 0
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 

@@ -2,10 +2,13 @@ name: Production acceptance
 
 on:
   push:
-    branches: [master, 'feature/**', 'fix/**']
+    branches: [master]
   pull_request:
   workflow_dispatch:
 
+# The job executes code from the pull request and therefore receives no write
+# permission. Diagnostics are uploaded as artifacts instead of commenting from
+# the same privileged job.
 permissions:
   contents: read
 
@@ -13,70 +16,108 @@ concurrency:
   group: acceptance-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   deterministic-acceptance:
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 60
+    env:
+      BRAIN_API_KEY: ci-only-random-brain-api-key-000000000000000000
+      GEMINI_API_KEY: ci-gemini-placeholder
+      TELEGRAM_BOT_TOKEN: 123456789:ci-telegram-placeholder-token
+      TELEGRAM_OWNER_ID: '123456789'
+      WEBUI_SECRET_KEY: ci-only-random-webui-secret-000000000000000000
+      BRAIN_INGEST_CORPUS: 'false'
+      EMBEDDING_PROVIDER_TYPE: hash_fallback
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
-      - name: Install
+          cache-dependency-path: requirements.txt
+      - name: Install system dependencies
         run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ffmpeg libgomp1 libsndfile1
+      - name: Install Python dependencies
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
           python -m pip install --upgrade pip
           pip install -r requirements.txt ruff
           pip check
       - name: Compile and lint correctness
         run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
           python -m compileall -q src scripts tests
           ruff check src scripts tests --select E9,F63,F7,F82 --output-format github
       - name: Validate production configuration and Compose
-        env:
-          BRAIN_API_KEY: ci-only-random-brain-api-key-000000000000000000
-          GEMINI_API_KEY: ci-gemini-placeholder
-          TELEGRAM_BOT_TOKEN: 123456789:ci-telegram-placeholder-token
-          TELEGRAM_OWNER_ID: '123456789'
-          WEBUI_SECRET_KEY: ci-only-random-webui-secret-000000000000000000
         run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
           python scripts/validate_environment.py api
           python scripts/validate_environment.py telegram
+          python scripts/validate_environment.py worker
           docker compose config --quiet
       - name: Course corpus is discoverable and ingestible
-        env:
-          BRAIN_API_KEY: ci-only-random-brain-api-key-000000000000000000
-          GEMINI_API_KEY: ci-gemini-placeholder
         run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
           python scripts/ingest_course_corpus.py --dry-run
-      - name: Deterministic reliability and product acceptance
+      - name: Complete deterministic offline suite
         run: |
-          pytest -q \
-            tests/reliability \
-            tests/brain/test_corpus_pipeline.py \
-            tests/brain/test_knowledge_grounding.py \
-            tests/brain/test_pricing_and_matching.py \
-            tests/brain/test_yaishka_deep_capabilities.py \
-            tests/brain/test_photographer_acceptance.py \
-            tests/brain/test_product_scenarios_50.py \
-            tests/brain/test_full_yaishka_parity.py \
-            tests/brain/test_guided_actions.py \
-            tests/brain/test_image_generation.py \
-            tests/brain/test_reply_safety.py \
-            tests/brain/test_style_learning.py \
-            tests/brain/test_telegram_reliability.py \
-            tests/brain/test_voice_loop.py \
-            tests/brain/test_outreach_policy.py \
-            tests/brain/test_memory_hygiene.py \
-            tests/brain/test_visual_identity.py \
-            tests/brain/test_reference_vault.py \
-            tests/brain/test_reference_intake.py \
-            -k 'not live_vision_critique' \
-            --junitxml=acceptance-results.xml | tee acceptance-log.txt
-      - uses: actions/upload-artifact@v4
+          set -Eeuo pipefail
+          pytest -q -m 'not live' tests \
+            --strict-markers \
+            --junitxml=acceptance-results.xml 2>&1 | tee -a acceptance-log.txt ci-diagnostics.log
+      - name: Build production services
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
+          docker compose build brain_api knowledge_worker telegram
+      - name: Compose startup smoke
+        run: |
+          set -Eeuo pipefail
+          exec > >(tee -a ci-diagnostics.log) 2>&1
+          docker compose up -d --no-build brain_api knowledge_worker
+          for attempt in $(seq 1 90); do
+            status="$(docker inspect --format='{{.State.Health.Status}}' brain-api 2>/dev/null || true)"
+            if [[ "$status" == "healthy" ]]; then break; fi
+            if [[ "$status" == "unhealthy" ]]; then
+              docker compose logs --no-color brain_api knowledge_worker
+              exit 1
+            fi
+            sleep 2
+          done
+          test "$(docker inspect --format='{{.State.Health.Status}}' brain-api)" = healthy
+          test "$(docker inspect --format='{{.State.Running}}' brain-knowledge-worker)" = true
+          curl --fail --silent --show-error http://127.0.0.1:8000/health/live
+          curl --fail --silent --show-error -H "Authorization: Bearer ${BRAIN_API_KEY}" http://127.0.0.1:8000/health/ready
+          code="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/health/ready)"
+          test "$code" = 401
+          curl --fail --silent --show-error -H "Authorization: Bearer ${BRAIN_API_KEY}" http://127.0.0.1:8000/v1/models
+      - name: Compose logs on failure
+        if: failure()
+        run: docker compose logs --no-color 2>&1 | tee -a ci-diagnostics.log || true
+      - name: Upload acceptance diagnostics
         if: always()
+        uses: actions/upload-artifact@v4
         with:
           name: acceptance-results
+          retention-days: 14
           path: |
             acceptance-results.xml
             acceptance-log.txt
+            ci-diagnostics.log
+      - name: Compose cleanup
+        if: always()
+        run: docker compose down --volumes --remove-orphans || true

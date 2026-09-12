@@ -85,18 +85,28 @@ src/brain/knowledge/    Проверенное ядро и legacy-материа
 src/brain/services/     BrainService и guided actions
 scripts/                Startup validation и production seed
 tests/                  Reliability и acceptance-наборы
-docs/                   Архитектура, ветки и live checklist
+docs/                   Архитектура, эксплуатация и live checklist
 ```
 
 ## Проверки
 
+Полная детерминированная проверка без реальных секретов:
+
 ```bash
 python -m compileall -q src scripts tests
-python scripts/validate_environment.py api
-pytest -q tests/reliability tests/brain/test_guided_actions.py
+ruff check src scripts tests --select E9,F63,F7,F82
+EMBEDDING_PROVIDER_TYPE=hash_fallback BRAIN_INGEST_CORPUS=false \
+  pytest -q -m 'not live' tests --strict-markers
 ```
 
-CI дополнительно проверяет Compose, Ruff и продуктовые acceptance-сценарии.
+CI дополнительно валидирует конфигурацию, собирает production images и выполняет Compose startup smoke. Live Gemini, Vision и Telegram проверяются отдельно с защищёнными секретами.
+
+## Эксплуатация и статус релиза
+
+- [`docs/OPERATIONS.md`](docs/OPERATIONS.md) — запуск, наблюдение, backup/restore, обновление, откат и инциденты.
+- [`docs/LIVE_RELEASE_CHECKLIST.md`](docs/LIVE_RELEASE_CHECKLIST.md) — проверки, которые нельзя имитировать без реальных Gemini/Telegram credentials.
+
+Успешный offline CI означает **Offline verified**, но не **Production ready**. Production-статус допускается только после live checklist.
 
 ## Статус каналов
 

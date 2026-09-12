@@ -53,7 +53,7 @@ async def limit_rate(request: Request, call_next):
 
 @app.middleware('http')
 async def protect_api(request: Request, call_next):
-    if request.url.path not in {'/', '/studio', '/health'}:
+    if request.url.path not in {'/', '/studio', '/health', '/health/live'}:
         try:
             verify_brain_api_key(request.headers.get('authorization'), request.headers.get('x-brain-api-key'))
         except HTTPException as exc:
@@ -67,6 +67,7 @@ async def protect_api(request: Request, call_next):
 
 
 @app.get('/health')
+@app.get('/health/live')
 def health():
     return {'status': 'alive', 'service': 'Personal AI Brain'}
 

@@ -1,229 +1,267 @@
-"""
-Background Ingestion Worker & Daemon for Knowledge Ingestion Factory.
-Pulls jobs from IngestionQueue with atomic leasing, periodic heartbeats,
-stale job reclamation, checkpoint tracking, and graceful shutdown.
-"""
-import os
-import sys
-import time
-import json
-import uuid
-import signal
-import logging
-import threading
+"""Durable knowledge ingestion worker with end-to-end lease fencing."""
+from __future__ import annotations
+
 import argparse
+import json
+import logging
+import os
+import signal
+import sqlite3
+import threading
+import time
+import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
 from src.brain.db import get_connection
-from src.brain.models.knowledge import IngestionJob, IngestionStatus
-from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
 from src.brain.knowledge.factory import KnowledgeIngestionFactory
+from src.brain.knowledge.fenced_ingestion import ingest_file_fenced
+from src.brain.knowledge.queue.fencing import (
+    LeaseLostError,
+    fail_owned,
+    finalize,
+    make_fence,
+)
+from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
+from src.brain.models.knowledge import IngestionJob
 
 logger = logging.getLogger("brain.knowledge.worker")
 
+
 class IngestionWorker:
-    """
-    Ingestion Worker that processes jobs with lease management and heartbeats.
-    Eliminates arbitrary code execution (no eval()) and provides resilient processing.
-    """
     def __init__(
         self,
         queue: Optional[IngestionQueue] = None,
         factory: Optional[KnowledgeIngestionFactory] = None,
         worker_id: Optional[str] = None,
-        lease_seconds: int = 60
+        lease_seconds: int = 60,
     ):
+        if lease_seconds <= 0:
+            raise ValueError("lease_seconds must be positive")
         self.queue = queue or IngestionQueue()
         self.factory = factory or KnowledgeIngestionFactory()
         self.worker_id = worker_id or f"worker-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         self.lease_seconds = lease_seconds
-        self._current_job_id: Optional[str] = None
+        self._current_job: Optional[IngestionJob] = None
         self._stop_heartbeat = threading.Event()
+        self._lease_lost = threading.Event()
         self._heartbeat_thread: Optional[threading.Thread] = None
 
-    def _start_heartbeat(self, job_id: str):
+    def _start_heartbeat(self, job: IngestionJob) -> None:
         self._stop_heartbeat.clear()
-        interval = max(5.0, self.lease_seconds / 3.0)
+        self._lease_lost.clear()
+        interval = max(1.0, min(20.0, self.lease_seconds / 3.0))
 
-        def _hb_loop():
+        def _heartbeat_loop() -> None:
             while not self._stop_heartbeat.wait(interval):
                 try:
-                    self.queue.heartbeat(job_id, self.worker_id, self.lease_seconds)
-                except Exception as e:
-                    logger.warning(f"Heartbeat failed for job {job_id}: {e}")
+                    ok = self.queue.heartbeat(
+                        job.job_id,
+                        self.worker_id,
+                        self.lease_seconds,
+                        lease_token=job.lease_token,
+                    )
+                    if not ok:
+                        self._lease_lost.set()
+                        logger.error("Lease lost for ingestion job %s", job.job_id)
+                        return
+                except sqlite3.OperationalError as exc:
+                    if "locked" in str(exc).lower():
+                        logger.warning("Heartbeat delayed by fenced writer lock for %s", job.job_id)
+                        continue
+                    self._lease_lost.set()
+                    logger.exception("Heartbeat failed for ingestion job %s", job.job_id)
+                    return
+                except Exception:
+                    self._lease_lost.set()
+                    logger.exception("Heartbeat failed for ingestion job %s", job.job_id)
+                    return
 
-        self._heartbeat_thread = threading.Thread(target=_hb_loop, daemon=True)
+        self._heartbeat_thread = threading.Thread(target=_heartbeat_loop, daemon=True)
         self._heartbeat_thread.start()
 
-    def _stop_heartbeat_loop(self):
+    def _stop_heartbeat_loop(self) -> None:
         self._stop_heartbeat.set()
         if self._heartbeat_thread and self._heartbeat_thread.is_alive():
-            self._heartbeat_thread.join(timeout=1.0)
+            self._heartbeat_thread.join(timeout=2.0)
         self._heartbeat_thread = None
 
+    def _require_live_lease(self, job: IngestionJob) -> None:
+        if self._lease_lost.is_set() or not self.queue.owns_lease(
+            job.job_id, self.worker_id, job.lease_token
+        ):
+            self._lease_lost.set()
+            raise LeaseLostError(
+                f"Ingestion lease lost for job {job.job_id}; stale worker is fenced"
+            )
+
+    def _fail_owned_job(self, job: IngestionJob, message: str) -> bool:
+        try:
+            return self.queue.fail_job(
+                job.job_id,
+                message,
+                self.worker_id,
+                job.lease_token,
+            )
+        except Exception:
+            logger.exception("Could not record failure for ingestion job %s", job.job_id)
+            return False
+
     def process_job(self, job: IngestionJob) -> bool:
-        """Processes a single job with heartbeat and checkpoint tracking."""
-        source_id = job.source_id
-        self._current_job_id = job.job_id
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("SELECT storage_path, title, category, metadata_json FROM knowledge_sources WHERE source_id = ?", (source_id,))
-        row = c.fetchone()
-        conn.close()
+        """Process one exact lease attempt and never fail a reclaimed attempt."""
+        if job.worker_id != self.worker_id or job.lease_token <= 0:
+            raise ValueError("worker may process only a job claimed with its current lease token")
+        self._current_job = job
+        fence = make_fence(job)
+        connection = get_connection()
+        try:
+            row = connection.execute(
+                "SELECT storage_path, title, category, metadata_json "
+                "FROM knowledge_sources WHERE source_id = ?",
+                (job.source_id,),
+            ).fetchone()
+        finally:
+            connection.close()
 
         if not row:
-            self.queue.fail_job(job.job_id, f"Source '{source_id}' not found in database")
-            self._current_job_id = None
+            self._fail_owned_job(job, f"Source {job.source_id!r} not found in database")
+            self._current_job = None
             return False
-
         file_path = Path(row["storage_path"])
         if not file_path.exists():
-            self.queue.fail_job(job.job_id, f"Original file not found at '{file_path}'")
-            self._current_job_id = None
+            self._fail_owned_job(job, "Registered original file is missing from storage")
+            self._current_job = None
             return False
 
-        self._start_heartbeat(job.job_id)
+        self._start_heartbeat(job)
         try:
-            self.queue.update_progress(job.job_id, "PROCESSING", 0.3, checkpoint_stage="EXTRACTING")
-
-            # Parse metadata strictly via json.loads (NO eval())
-            raw_meta = row["metadata_json"]
-            meta: Dict[str, Any] = {}
-            if raw_meta and isinstance(raw_meta, str):
+            self._require_live_lease(job)
+            metadata: Dict[str, Any] = {}
+            raw_metadata = row["metadata_json"]
+            if raw_metadata and isinstance(raw_metadata, str):
                 try:
-                    meta = json.loads(raw_meta)
-                except Exception:
-                    meta = {}
+                    parsed = json.loads(raw_metadata)
+                    if isinstance(parsed, dict):
+                        metadata = parsed
+                except json.JSONDecodeError:
+                    logger.warning("Ignoring invalid source metadata JSON for %s", job.source_id)
 
-            # Ingest/process through factory
-            self.factory.ingest_file(
+            ingest_file_fenced(
+                self.factory,
+                queue=self.queue,
+                fence=fence,
                 file_path=file_path,
                 title=row["title"],
-                metadata=meta,
-                job_id=job.job_id,
-                source_id=job.source_id
+                metadata=metadata,
+                lease_seconds=self.lease_seconds,
             )
-            self.queue.complete_job(job.job_id)
-            return True
-        except Exception as e:
-            logger.error(f"Job {job.job_id} processing failed: {e}", exc_info=True)
-            self.queue.fail_job(job.job_id, str(e))
+            self._require_live_lease(job)
+            return finalize(self.queue, fence)
+        except LeaseLostError:
+            logger.warning("Stale ingestion worker fenced for job %s", job.job_id)
+            return False
+        except Exception as exc:
+            logger.exception("Ingestion job %s failed", job.job_id)
+            fail_owned(self.queue, fence, str(exc))
             return False
         finally:
             self._stop_heartbeat_loop()
-            self._current_job_id = None
+            self._current_job = None
 
     def process_next(self) -> bool:
-        """Pulls and processes next ready job using atomic lease. Returns True if a job was processed."""
-        job = self.queue.claim_job(worker_id=self.worker_id, lease_seconds=self.lease_seconds)
+        job = self.queue.claim_job(
+            worker_id=self.worker_id,
+            lease_seconds=self.lease_seconds,
+        )
         if not job:
             return False
         return self.process_job(job)
 
     def run_batch(self, max_jobs: int = 10) -> int:
-        """Processes up to max_jobs from queue."""
         processed = 0
         for _ in range(max_jobs):
-            if not self.process_next():
+            job = self.queue.claim_job(
+                worker_id=self.worker_id,
+                lease_seconds=self.lease_seconds,
+            )
+            if not job:
                 break
+            self.process_job(job)
             processed += 1
         return processed
 
 
 class IngestionWorkerDaemon:
-    """
-    Continuous daemon runner with signal management, periodic stale job recovery,
-    and graceful shutdown.
-    """
     def __init__(
         self,
         worker: Optional[IngestionWorker] = None,
         poll_interval: float = 2.0,
-        reclaim_interval: float = 60.0
+        reclaim_interval: float = 60.0,
     ):
         self.worker = worker or IngestionWorker()
-        self.poll_interval = poll_interval
-        self.reclaim_interval = reclaim_interval
+        self.poll_interval = max(0.1, poll_interval)
+        self.reclaim_interval = max(1.0, reclaim_interval)
         self.running = False
 
-    def _handle_signal(self, signum, frame):
-        logger.info(f"Signal {signum} received. Initiating graceful shutdown...")
+    def _handle_signal(self, signum, frame) -> None:
+        logger.info("Signal %s received; stopping after the current operation", signum)
         self.running = False
 
-    def start(self):
-        """Starts the worker daemon loop."""
+    def start(self) -> None:
         self.running = True
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
-
-        logger.info(f"Ingestion Worker Daemon started [ID: {self.worker.worker_id}]. Polling queue...")
+        logger.info("Ingestion worker %s started", self.worker.worker_id)
         last_reclaim = 0.0
-
         while self.running:
             try:
-                now = time.time()
-                # Periodic stale job reclamation
-                if now - last_reclaim > self.reclaim_interval:
+                now = time.monotonic()
+                if now - last_reclaim >= self.reclaim_interval:
                     reclaimed = self.worker.queue.reclaim_stale_jobs()
-                    if reclaimed > 0:
-                        logger.info(f"Reclaimed {reclaimed} stale/abandoned jobs for retry.")
+                    if reclaimed:
+                        logger.info("Reclaimed %s expired ingestion jobs", reclaimed)
                     last_reclaim = now
-
-                # Claim and process
-                processed = self.worker.process_next()
-                if not processed:
+                if not self.worker.process_next():
                     time.sleep(self.poll_interval)
-            except Exception as e:
-                logger.error(f"Daemon worker loop error: {e}", exc_info=True)
+            except Exception:
+                logger.exception("Ingestion daemon loop failed")
                 time.sleep(self.poll_interval)
+        logger.info("Ingestion worker %s stopped", self.worker.worker_id)
 
-        logger.info(f"Ingestion Worker Daemon [ID: {self.worker.worker_id}] stopped cleanly.")
-
-    def stop(self):
+    def stop(self) -> None:
         self.running = False
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Knowledge Ingestion Worker Daemon")
-    parser.add_argument("--worker-id", type=str, default=None, help="Unique worker identifier")
-    parser.add_argument("--poll-interval", type=float, default=2.0, help="Polling interval in seconds when idle")
-    parser.add_argument("--lease-seconds", type=int, default=60, help="Job lease timeout in seconds")
-    parser.add_argument("--once", action="store_true", help="Process current queue batch and exit")
-    parser.add_argument("--batch-size", type=int, default=10, help="Batch size for --once execution")
-    parser.add_argument("--reclaim-stale", action="store_true", help="Reclaim stale jobs and exit")
-
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Knowledge ingestion worker")
+    parser.add_argument("--worker-id", default=None)
+    parser.add_argument("--poll-interval", type=float, default=2.0)
+    parser.add_argument("--lease-seconds", type=int, default=60)
+    parser.add_argument("--once", action="store_true")
+    parser.add_argument("--batch-size", type=int, default=10)
+    parser.add_argument("--reclaim-stale", action="store_true")
     args = parser.parse_args()
-
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s"
+        format="%(asctime)s [%(levelname)s] (%(name)s) %(message)s",
     )
-
     queue = IngestionQueue()
     if args.reclaim_stale:
-        reclaimed = queue.reclaim_stale_jobs(stale_threshold_seconds=args.lease_seconds)
-        print(f"Reclaimed {reclaimed} stale jobs.")
-        sys.exit(0)
-
+        print(f"Reclaimed {queue.reclaim_stale_jobs()} stale jobs.")
+        return
     worker = IngestionWorker(
         queue=queue,
         worker_id=args.worker_id,
-        lease_seconds=args.lease_seconds
+        lease_seconds=args.lease_seconds,
     )
-
     if args.once:
-        print(f"Processing up to {args.batch_size} jobs...")
-        processed = worker.run_batch(max_jobs=args.batch_size)
-        print(f"Finished. Processed {processed} jobs.")
-        sys.exit(0)
-
-    daemon = IngestionWorkerDaemon(
+        print(f"Finished. Processed {worker.run_batch(args.batch_size)} jobs.")
+        return
+    IngestionWorkerDaemon(
         worker=worker,
         poll_interval=args.poll_interval,
-        reclaim_interval=float(args.lease_seconds)
-    )
-    daemon.start()
+        reclaim_interval=float(args.lease_seconds),
+    ).start()
 
 
 if __name__ == "__main__":
