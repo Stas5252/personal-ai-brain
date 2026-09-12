@@ -342,7 +342,7 @@ class ContentEngine:
             }
             for index, (name, visual, text) in enumerate(rows, 1)
         ]
-        formatted = "\n\n".join(
+        formatted = "9-ШАГОВАЯ АРКА STORIES\n\n" + "\n\n".join(
             f"### Кадр {step['step_number']}: {step['step_name']}\n"
             f"🎬 {step['visual']}\n💬 {step['text_on_screen']}"
             for step in steps
