@@ -13,11 +13,10 @@ x-brain-common: &brain-common
     UPSTREAM_LLM_BASE_URL: ${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
     EMBEDDING_PROVIDER_TYPE: ${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
     MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
-    # Repository-local course corpus. Its ceiling is separate from the upload
-    # ceiling above because six shipped lesson PDFs exceed 20 MB.
-    BRAIN_CORPUS_DIR: /app/материалы для ии
+    BRAIN_CORPUS_DIR: /app/corpus
     CORPUS_MAX_FILE_SIZE_BYTES: ${CORPUS_MAX_FILE_SIZE_BYTES:-67108864}
     BRAIN_INGEST_CORPUS: ${BRAIN_INGEST_CORPUS:-true}
+    BRAIN_GROUNDING_ENABLED: ${BRAIN_GROUNDING_ENABLED:-true}
     BRAIN_RATE_LIMIT_ENABLED: ${BRAIN_RATE_LIMIT_ENABLED:-true}
     BRAIN_RATE_LIMIT_REQUESTS: ${BRAIN_RATE_LIMIT_REQUESTS:-120}
     BRAIN_RATE_LIMIT_WINDOW_SECONDS: ${BRAIN_RATE_LIMIT_WINDOW_SECONDS:-60}
@@ -27,6 +26,10 @@ x-brain-common: &brain-common
     BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
   volumes:
     - brain-data:/app/data
+    - type: bind
+      source: "${BRAIN_CORPUS_HOST_DIR:-./материалы для ии}"
+      target: /app/corpus
+      read_only: true
 
 services:
   brain_api:
@@ -44,15 +47,27 @@ services:
       retries: 3
       start_period: 60s
 
+  knowledge_worker:
+    <<: *brain-common
+    container_name: brain-knowledge-worker
+    command: ["python", "-m", "src.brain.knowledge.queue.worker"]
+    environment:
+      <<: *brain-environment
+      BRAIN_SERVICE: worker
+      BRAIN_INGEST_CORPUS: "false"
+    depends_on:
+      brain_api:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+
   telegram:
     <<: *brain-common
     container_name: brain-telegram
-    command: ["python", "-m", "src.brain.channels.telegram_guided_runner"]
+    command: ["python", "-m", "src.brain.channels.telegram_production_runner"]
     environment:
       <<: *brain-environment
       BRAIN_SERVICE: telegram
-      # Only the API container ingests the corpus; two writers would race on
-      # the same SQLite database and Chroma directory.
       BRAIN_INGEST_CORPUS: "false"
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:?Set TELEGRAM_OWNER_ID in .env}

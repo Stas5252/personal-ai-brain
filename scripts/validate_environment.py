@@ -14,6 +14,7 @@ PLACEHOLDER_PREFIXES = (
     "replace_with",
     "your_",
 )
+SUPPORTED_SERVICES = {"api", "telegram", "worker"}
 
 
 def _unsafe_secret(value: str, minimum: int = 32) -> bool:
@@ -27,13 +28,17 @@ def collect_errors(service: str, env: Mapping[str, str] | None = None) -> list[s
     api_key = values.get("BRAIN_API_KEY", "").strip()
     gemini_key = values.get("GEMINI_API_KEY", "").strip()
     telegram_token = values.get("TELEGRAM_BOT_TOKEN", "").strip()
+    telegram_owner = values.get("TELEGRAM_OWNER_ID", "").strip()
 
     if _unsafe_secret(api_key):
         errors.append("BRAIN_API_KEY must be a random secret of at least 32 characters")
-    if service in {"api", "telegram"} and not gemini_key:
+    if service in SUPPORTED_SERVICES and not gemini_key:
         errors.append("GEMINI_API_KEY is required for live AI responses")
-    if service == "telegram" and len(telegram_token) < 20:
-        errors.append("TELEGRAM_BOT_TOKEN is required for the Telegram service")
+    if service == "telegram":
+        if len(telegram_token) < 20:
+            errors.append("TELEGRAM_BOT_TOKEN is required for the Telegram service")
+        if not telegram_owner.isdigit() or int(telegram_owner or "0") <= 0:
+            errors.append("TELEGRAM_OWNER_ID must be a positive numeric Telegram user ID")
     if api_key and api_key in {gemini_key, telegram_token}:
         errors.append("BRAIN_API_KEY must be different from provider and bot tokens")
 
@@ -50,7 +55,7 @@ def collect_errors(service: str, env: Mapping[str, str] | None = None) -> list[s
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
     service = (args[0] if args else os.environ.get("BRAIN_SERVICE", "api")).strip().lower()
-    if service not in {"api", "telegram"}:
+    if service not in SUPPORTED_SERVICES:
         print(f"Unsupported BRAIN_SERVICE: {service}", file=sys.stderr)
         return 2
     errors = collect_errors(service)
