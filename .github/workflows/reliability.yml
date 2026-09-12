@@ -15,7 +15,7 @@ concurrency:
 
 defaults:
   run:
-    # An explicit bash shell enables -e and pipefail on GitHub-hosted runners.
+    # Explicit bash enables -e and pipefail on GitHub-hosted runners.
     shell: bash
 
 jobs:
@@ -32,10 +32,13 @@ jobs:
       EMBEDDING_PROVIDER_TYPE: hash_fallback
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
+          cache-dependency-path: requirements.txt
       - name: Install
         run: |
           set -Eeuo pipefail
@@ -61,14 +64,14 @@ jobs:
       - name: Complete deterministic offline suite
         run: |
           set -Eeuo pipefail
-          pytest -q tests \
-            -k 'not live_vision_critique' \
+          pytest -q -m 'not live' tests \
             --strict-markers \
             --junitxml=acceptance-results.xml 2>&1 | tee acceptance-log.txt
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: acceptance-results
+          retention-days: 14
           path: |
             acceptance-results.xml
             acceptance-log.txt
