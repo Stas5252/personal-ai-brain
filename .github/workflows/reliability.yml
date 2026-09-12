@@ -6,9 +6,11 @@ on:
   pull_request:
   workflow_dispatch:
 
+# The job executes code from the pull request and therefore receives no write
+# permission. Diagnostics are uploaded as artifacts instead of commenting from
+# the same privileged job.
 permissions:
   contents: read
-  pull-requests: write
 
 concurrency:
   group: acceptance-${{ github.workflow }}-${{ github.ref }}
@@ -77,15 +79,6 @@ jobs:
           pytest -q -m 'not live' tests \
             --strict-markers \
             --junitxml=acceptance-results.xml 2>&1 | tee -a acceptance-log.txt ci-diagnostics.log
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: acceptance-results
-          retention-days: 14
-          path: |
-            acceptance-results.xml
-            acceptance-log.txt
-            ci-diagnostics.log
       - name: Build production services
         run: |
           set -Eeuo pipefail
@@ -107,7 +100,7 @@ jobs:
           done
           test "$(docker inspect --format='{{.State.Health.Status}}' brain-api)" = healthy
           test "$(docker inspect --format='{{.State.Running}}' brain-knowledge-worker)" = true
-          curl --fail --silent --show-error http://127.0.0.1:8000/health
+          curl --fail --silent --show-error http://127.0.0.1:8000/health/live
           curl --fail --silent --show-error -H "Authorization: Bearer ${BRAIN_API_KEY}" http://127.0.0.1:8000/health/ready
           code="$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:8000/health/ready)"
           test "$code" = 401
@@ -115,36 +108,16 @@ jobs:
       - name: Compose logs on failure
         if: failure()
         run: docker compose logs --no-color 2>&1 | tee -a ci-diagnostics.log || true
-      - name: Publish failure diagnostics
-        if: failure() && github.event_name == 'pull_request'
-        uses: actions/github-script@v7
+      - name: Upload acceptance diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          script: |
-            const fs = require('fs');
-            const marker = '<!-- production-ci-diagnostics -->';
-            let log = 'No local diagnostic log was produced.';
-            if (fs.existsSync('ci-diagnostics.log')) {
-              log = fs.readFileSync('ci-diagnostics.log', 'utf8').slice(-50000);
-            }
-            const body = `${marker}\n## Production acceptance failed\n\n` +
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}\n\n` +
-              `<details><summary>Last diagnostic output</summary>\n\n\`\`\`text\n${log}\n\`\`\`\n</details>`;
-            const comments = await github.paginate(github.rest.issues.listComments, {
-              owner: context.repo.owner, repo: context.repo.repo,
-              issue_number: context.issue.number, per_page: 100,
-            });
-            const previous = comments.find(c => c.user.type === 'Bot' && c.body.includes(marker));
-            if (previous) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                comment_id: previous.id, body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner, repo: context.repo.repo,
-                issue_number: context.issue.number, body,
-              });
-            }
+          name: acceptance-results
+          retention-days: 14
+          path: |
+            acceptance-results.xml
+            acceptance-log.txt
+            ci-diagnostics.log
       - name: Compose cleanup
         if: always()
         run: docker compose down --volumes --remove-orphans || true
