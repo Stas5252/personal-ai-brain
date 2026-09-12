@@ -332,7 +332,13 @@ class ContentEngine:
                 "step_name": name,
                 "visual": visual,
                 "text_on_screen": text,
-                "sticker": "Опрос" if index == 4 else None,
+                "sticker": (
+                    "Опрос"
+                    if index == 4
+                    else "Ссылка или вопрос"
+                    if index == 9
+                    else None
+                ),
             }
             for index, (name, visual, text) in enumerate(rows, 1)
         ]
@@ -387,7 +393,7 @@ class ContentEngine:
             "как именно вы помогаете во время съёмки, используя только свой реальный процесс.\n\n"
             "Что в подготовке вызывает больше всего вопросов?"
         )
-        formatted = "\n\n".join(
+        formatted = "REELS ДЛЯ ИНТРОВЕРТА\n\n" + "\n\n".join(
             f"### {scene['timing']}\n{scene['visual']}\nТекст: {scene['text_overlay']}"
             for scene in scenes
         ) + f"\n\nТекст поста:\n{caption}"
