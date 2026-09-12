@@ -58,8 +58,6 @@ class StorageManager:
     @staticmethod
     def sanitize_filename(filename: str) -> str:
         """Return a portable basename without traversal or hidden dot-runs."""
-        # pathlib/os.path only recognize separators of the host OS. Treat both
-        # slash styles as separators so Windows payloads are safe on Linux too.
         base_name = re.split(r"[\\/]", str(filename or ""))[-1].strip()
         safe_name = re.sub(r"[^\w\s.-]", "_", base_name, flags=re.UNICODE)
         safe_name = re.sub(r"\.{2,}", ".", safe_name)
@@ -169,7 +167,10 @@ class StorageManager:
         if size > self.max_file_size_bytes:
             return FileValidationResult(
                 is_valid=False,
-                error_message=f"File size ({size} bytes) exceeds maximum ({self.max_file_size_bytes} bytes).",
+                error_message=(
+                    f"File size ({size} bytes) exceeds maximum allowed size "
+                    f"({self.max_file_size_bytes} bytes)."
+                ),
             )
         valid, error = self.validate_magic_bytes(path, extension)
         if not valid:
@@ -188,31 +189,33 @@ class StorageManager:
 
     def check_duplicate(self, sha256: str, exclude_source_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
         connection = get_connection()
-        cursor = connection.cursor()
-        if exclude_source_id:
-            cursor.execute(
-                "SELECT * FROM knowledge_sources WHERE sha256 = ? "
-                "AND ingestion_status IN ('COMPLETED', 'DUPLICATE') AND source_id != ?",
-                (sha256, exclude_source_id),
-            )
-        else:
-            cursor.execute(
-                "SELECT * FROM knowledge_sources WHERE sha256 = ? "
-                "AND ingestion_status IN ('COMPLETED', 'DUPLICATE')",
-                (sha256,),
-            )
-        row = cursor.fetchone()
-        connection.close()
-        return dict(row) if row else None
+        try:
+            if exclude_source_id:
+                row = connection.execute(
+                    "SELECT * FROM knowledge_sources WHERE sha256 = ? "
+                    "AND ingestion_status IN ('COMPLETED', 'DUPLICATE') AND source_id != ?",
+                    (sha256, exclude_source_id),
+                ).fetchone()
+            else:
+                row = connection.execute(
+                    "SELECT * FROM knowledge_sources WHERE sha256 = ? "
+                    "AND ingestion_status IN ('COMPLETED', 'DUPLICATE')",
+                    (sha256,),
+                ).fetchone()
+            return dict(row) if row else None
+        finally:
+            connection.close()
 
     def record_duplicate_encounter(self, source_id: str):
         connection = get_connection()
-        connection.execute(
-            "UPDATE knowledge_sources SET seen_count = seen_count + 1 WHERE source_id = ?",
-            (source_id,),
-        )
-        connection.commit()
-        connection.close()
+        try:
+            connection.execute(
+                "UPDATE knowledge_sources SET seen_count = seen_count + 1 WHERE source_id = ?",
+                (source_id,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
 
     def store_original(self, file_path: Path, sha256: str, safe_name: str) -> Path:
         prefix = self.originals_dir / sha256[:2] / sha256[2:4]
