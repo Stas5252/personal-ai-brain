@@ -1,168 +1,124 @@
-"""
-Specialized Voice Workflow Engine for Personal AI Brain.
-Processes raw voice notes / STT transcripts from photographers,
-extracts narrative events and business insights, and generates
-complete derivative content packs (1 Post, 2 Reels, 5 Stories, 1 Task).
-"""
-from typing import Dict, Any, List, Optional
+"""Convert a transcript into derivative drafts without inventing source facts."""
+from __future__ import annotations
+
+import json
+import re
+from typing import Any, Dict, Optional
+
 from src.brain.models.profile import UserProfile
-from src.brain.models.task import Task, TaskStatus, TaskPriority
+
 
 class VoiceEngine:
-    def __init__(self):
-        pass
-
     def process_voice_transcript(
         self,
         transcript: str,
         profile: Optional[UserProfile] = None,
-        use_llm: bool = True
+        use_llm: bool = True,
     ) -> Dict[str, Any]:
-        """
-        Deconstructs spoken stream-of-consciousness into structured business & content assets,
-        dynamically extracting actual events, conflicts, insights, and derivative media via LLM.
-        """
-        import re
-        clean_text = transcript.strip()
-
+        source = str(transcript or "").strip()
+        if not source:
+            raise ValueError("Voice transcript is empty")
         if use_llm:
             try:
-                import json
                 from src.brain.services.llm_provider import LLMProvider
-                llm = LLMProvider()
-                niche = profile.niche if profile and profile.niche else "авторская фотография"
-                tone = profile.tone if profile and profile.tone else "искренний, кинематографичный"
+
+                niche = profile.niche if profile and profile.niche else "фотография"
                 prompt = (
-                    f"Ты — профессиональный контент-продюсер и сторителлер фотографа ({niche}, тон: {tone}).\n"
-                    f"Фотограф надиктовал голосовую заметку со съёмки или мысли:\n"
-                    f"«««\n{clean_text}\n»»»\n\n"
-                    f"Разбери эту аудиозапись и создай готовый комплект публикаций.\n"
-                    f"Верни ИСКЛЮЧИТЕЛЬНО валидный JSON объект:\n"
-                    f"{{\n"
-                    f'  "source_transcript": {json.dumps(clean_text, ensure_ascii=False)},\n'
-                    f'  "extracted_events": ["событие 1", "событие 2"],\n'
-                    f'  "story_beats": ["Экспозиция: ...", "Кульминация: ...", "Развязка: ..."],\n'
-                    f'  "business_insights": ["бизнес-инсайт 1", "бизнес-инсайт 2"],\n'
-                    f'  "derivative_post": "готовый сильный пост от первого лица с абзацами",\n'
-                    f'  "derivative_reels": [\n'
-                    f'    {{"id": "reel_1", "title": "заголовок", "hook": "хук", "visual": "видеоряд", "text_on_screen": "текст", "voiceover": "голос", "cta": "призыв"}},\n'
-                    f'    {{"id": "reel_2", "title": "заголовок", "hook": "хук", "visual": "видеоряд", "text_on_screen": "текст", "voiceover": "голос", "cta": "призыв"}}\n'
-                    f'  ],\n'
-                    f'  "derivative_stories": [\n'
-                    f'    {{"slide": 1, "type": "Hook", "text": "слайд 1"}},\n'
-                    f'    {{"slide": 2, "type": "Context", "text": "слайд 2"}},\n'
-                    f'    {{"slide": 3, "type": "Turning Point", "text": "слайд 3"}},\n'
-                    f'    {{"slide": 4, "type": "Result", "text": "слайд 4"}},\n'
-                    f'    {{"slide": 5, "type": "CTA", "text": "слайд 5"}}\n'
-                    f'  ],\n'
-                    f'  "suggested_task": {{"title": "действие фотографа по итогам", "priority": "HIGH", "due_in_hours": 24}}\n'
-                    f"}}"
+                    "Верни только JSON: source_transcript, extracted_events, story_beats, "
+                    "business_insights, derivative_post, derivative_reels (2), derivative_stories (5), "
+                    "suggested_task. Все факты, числа, отзывы, эмоции, результаты и события должны "
+                    "дословно следовать из транскрипта. Не заполняй пробелы выдумками. "
+                    f"Ниша: {niche}. Транскрипт: {json.dumps(source, ensure_ascii=False)}"
                 )
-                code, text, _, _ = llm.chat_completion([{"role": "user", "content": prompt}], temperature=0.6)
-                if code == 200 and not text.strip().startswith("Тестовый ответ"):
-                    clean = text.strip()
-                    if clean.startswith("```"):
-                        clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                    parsed = json.loads(clean)
-                    if isinstance(parsed, dict) and "derivative_post" in parsed and "derivative_reels" in parsed:
+                status, text, _, _ = LLMProvider().chat_completion(
+                    [{"role": "user", "content": prompt}], temperature=0.5
+                )
+                if status == 200 and not text.strip().startswith("Тестовый ответ"):
+                    cleaned = text.strip()
+                    if cleaned.startswith("```"):
+                        cleaned = cleaned.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+                    parsed = json.loads(cleaned)
+                    if isinstance(parsed, dict) and parsed.get("derivative_post"):
                         return parsed
             except Exception:
                 pass
 
-        sentences = [s.strip() for s in re.split(r'[.!?]+', clean_text) if len(s.strip()) > 3]
-        if not sentences:
-            sentences = [clean_text]
-
-        t_lower = clean_text.lower().replace("ё", "е")
-
-        # 1. Extract Events directly from spoken sentences
-        events = [f"Зафиксировано событие: «{s}»" for s in sentences[:3]]
-
-        # 2. Extract Story Beats
-        opening = sentences[0] if len(sentences) > 0 else clean_text
-        middle = sentences[1] if len(sentences) > 1 else sentences[0]
-        resolution = sentences[-1] if len(sentences) > 2 else "Итог съемки: яркие кадры и преодоление скованности"
-
-        story_beats = [
+        sentences = [part.strip() for part in re.split(r"[.!?]+", source) if part.strip()]
+        events = [f"Из транскрипта: «{sentence}»" for sentence in sentences[:3]]
+        opening = sentences[0]
+        middle = sentences[1] if len(sentences) > 1 else "Дополнительные детали не указаны"
+        ending = sentences[-1] if len(sentences) > 2 else "Итог в транскрипте не указан"
+        beats = [
             f"Экспозиция: {opening}",
-            f"Кульминация и переломный момент: {middle}",
-            f"Развязка и эмоциональный отклик: {resolution}"
+            f"Развитие: {middle}",
+            f"Итог: {ending}",
         ]
 
-        # 3. Derive Business Insights based on topic
-        if any(w in t_lower for w in ["цен", "прайс", "чек", "деньг", "подорож"]):
-            business_insights = [
-                "Повышение цен требует прозрачной коммуникации добавленной ценности и заблаговременного анонса постоянным клиентам.",
-                "Психологический барьер фотографа перед ростом чека снимается четким регламентом подготовки и сервиса."
+        lowered = source.casefold().replace("ё", "е")
+        if any(word in lowered for word in ("цен", "прайс", "чек", "деньг")):
+            insights = [
+                "Проверьте, какие цена и состав услуги действительно названы в заметке.",
+                "Перед публикацией отделите личное мнение от подтверждённых коммерческих условий.",
             ]
-            task_title = "Сформировать новую линейку пакетов и подготовить обращение к постоянным клиентам"
-        elif any(w in t_lower for w in ["ресторан", "меню", "шеф", "блюд", "предмет"]):
-            business_insights = [
-                "Коммерческая фуд-съемка требует жесткого тайминга подачи горячих блюд и точной работы с контровым светом.",
-                "Упаковка ресторанного кейса в карусель привлекает новых B2B-заказчиков с высоким чеком."
+            task = "Проверить прайс и подготовить коммуникацию на основе названных условий"
+        elif any(word in lowered for word in ("ресторан", "меню", "блюд", "предмет")):
+            insights = [
+                "Соберите кейс только из процессов и результата, которые прямо названы в заметке.",
+                "Добавьте технические параметры после проверки исходных файлов и брифа.",
             ]
-            task_title = "Отобрать 15 лучших кадров для коммерческого портфолио ресторана"
+            task = "Отобрать подтверждённые материалы для коммерческого кейса"
         else:
-            business_insights = [
-                "Бережная предварительная подготовка и правильная атмосфера на съемке (музыка, диалог) снимают 90% клиентского стресса.",
-                "Искренние живые эмоции и кадры до/после — самый конвертирующий контент для прогрева новой аудитории."
+            insights = [
+                "Используйте в публикации только наблюдения из голосовой заметки.",
+                "Если результат, отзыв или цифра не названы, запросите их до финальной публикации.",
             ]
-            task_title = "Отправить клиенту первые 3-5 готовых тизеров съемки"
+            task = "Дополнить заметку недостающими фактами перед публикацией"
 
-        # 4. Generate Derivative Post
-        post_draft = (
-            f"«{opening}»\n\n"
-            f"Когда мы только начинали эту съемку, в воздухе чувствовалось напряжение. "
-            f"Но в фотографии главное — не заученные позы, а безопасное пространство, где человеку разрешено выдохнуть и быть собой.\n\n"
-            f"{middle}. И в этот момент магия случилась: скованность ушла, уступив место настоящему, глубокому взгляду.\n\n"
-            f"Ради таких моментов я и держу камеру в руках. {resolution}.\n\n"
-            f"А что для вас самое сложное в фотосессиях — подготовка или первые минуты перед объективом?"
+        post = (
+            f"{opening}.\n\n"
+            f"{middle}.\n\n"
+            f"{ending}.\n\n"
+            "Черновик сохраняет только факты исходной заметки. Перед публикацией проверьте имена, "
+            "цифры, согласие клиента и итоговый CTA."
         )
-
-        # 5. Generate Derivative Reels
-        reels_scripts = [
+        reels = [
             {
                 "id": "reel_1",
-                "title": f"Динамика съемки: {opening[:40]}...",
-                "hook": f"«{opening[:60]}...» — как переломить ход съемки за 5 минут.",
-                "visual": "Склейка: сначала напряженный взгляд в зеркало, затем динамичные живые кадры в движении под мягким светом.",
-                "text_on_screen": "Секрет живых кадров без заученных поз",
-                "voiceover": "Камера видит не ваше умение позировать, а ваше состояние. Стоит расслабиться — и кадр оживает.",
-                "cta": "Сохраняй идею для своей следующей съемки."
+                "title": opening[:80],
+                "hook": opening[:120],
+                "visual": "Используйте реальный видеоряд, относящийся к заметке.",
+                "text_on_screen": middle[:120],
+                "voiceover": source[:500],
+                "cta": "Задайте вопрос по теме без обещания результата.",
             },
             {
                 "id": "reel_2",
-                "title": "Бэкстейдж съемки и свет",
-                "hook": "Что видит фотограф за секунду до того, как рождается шедевр.",
-                "visual": "План со спины фотографа, работа с отражателем и готовый крупный портрет на мониторе камеры.",
-                "text_on_screen": "Чистый свет и никакого позирования",
-                "voiceover": "Правильный световой акцент подчеркивает взгляд и создает киношный объем без сложной ретуши.",
-                "cta": "Напиши '+' в комментарии, если хочешь подробный разбор световой схемы."
-            }
+                "title": "Разбор подтверждённого процесса",
+                "hook": middle[:120],
+                "visual": "Покажите фактический процесс или пометьте нужный кадр как TODO.",
+                "text_on_screen": ending[:120],
+                "voiceover": "Не добавляйте события и цифры, которых нет в исходной записи.",
+                "cta": "Предложите сохранить практический вывод.",
+            },
         ]
-
-        # 6. Generate Derivative Stories Pack
-        stories_pack = [
-            {"slide": 1, "type": "Hook / Backstage", "text": f"Вчерашняя съемка началась неожиданно... «{opening[:50]}» Показать изнанку?"},
-            {"slide": 2, "type": "Context / Challenge", "text": f"Главный барьер, с которым мы столкнулись: {middle[:70]}."},
-            {"slide": 3, "type": "Turning Point", "text": "Мы сменили ракурс, включили плейлист и просто начали разговаривать."},
-            {"slide": 4, "type": "Result / Visual Proof", "text": f"Кадр на дисплее камеры без единого фильтра. {resolution[:60]}."},
-            {"slide": 5, "type": "CTA / Question", "text": "Окошко: 'Какой ваш главный страх перед камерой?' + Ссылка на бронь дат"}
+        story_texts = [
+            opening,
+            middle,
+            "Покажите относящийся к заметке реальный backstage.",
+            ending,
+            "Перед публикацией подставьте только проверенный CTA.",
         ]
-
-        generated_task = {
-            "title": task_title,
-            "priority": "HIGH",
-            "due_in_hours": 24
-        }
-
+        stories = [
+            {"slide": index, "type": "Source-based draft", "text": text}
+            for index, text in enumerate(story_texts, 1)
+        ]
         return {
-            "source_transcript": clean_text,
+            "source_transcript": source,
             "extracted_events": events,
-            "story_beats": story_beats,
-            "business_insights": business_insights,
-            "derivative_post": post_draft,
-            "derivative_reels": reels_scripts,
-            "derivative_stories": stories_pack,
-            "suggested_task": generated_task
+            "story_beats": beats,
+            "business_insights": insights,
+            "derivative_post": post,
+            "derivative_reels": reels,
+            "derivative_stories": stories,
+            "suggested_task": {"title": task, "priority": "HIGH", "due_in_hours": 24},
         }
