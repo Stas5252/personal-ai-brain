@@ -1,6 +1,7 @@
 """
 LLM Provider Integration with Multi-Model Fallback and Upstream Quota Protection.
 """
+import logging
 import time
 import json
 import urllib.request
@@ -9,11 +10,17 @@ from typing import List, Dict, Any, Tuple, Optional
 from src.brain.config import (
     UPSTREAM_LLM_BASE_URL, GEMINI_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS
 )
+from src.brain.services import knowledge_grounding as grounding
+
+log = logging.getLogger(__name__)
 
 class LLMProvider:
     def __init__(self):
         self.base_url = UPSTREAM_LLM_BASE_URL.rstrip("/")
         self.api_key = GEMINI_API_KEY
+        # Titles of the owner's own materials that grounded the last call, so a
+        # channel can show them without running retrieval a second time.
+        self.last_grounding_sources: List[str] = []
 
     def chat_completion(
         self,
@@ -35,6 +42,17 @@ class LLMProvider:
         import os
         if os.environ.get("ENV") == "test" and not self.api_key:
             return 200, "Тестовый ответ ассистента фотографа.", 0.05, models_to_try[0]
+
+        # Every engine and every guided action reaches the model through this
+        # method, so grounding the prompt here is what makes the course corpus
+        # reachable from all of them — not only from BrainService.process_chat.
+        try:
+            messages, self.last_grounding_sources = grounding.augment_messages(messages)
+        except Exception:
+            # Grounding is an addition, never a dependency: a broken index must
+            # cost citations, not the answer.
+            self.last_grounding_sources = []
+            log.warning("Knowledge grounding failed; sending the prompt unchanged.", exc_info=True)
 
         url = f"{self.base_url}/chat/completions"
         headers = {
