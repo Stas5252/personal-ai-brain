@@ -6,6 +6,10 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
+MAX_DELIVERY_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 15
+
+
 def owner_allowed(message, owner_id):
     return bool(owner_id) and (
         message.get('chat', {}).get('type') == 'private'
@@ -28,16 +32,48 @@ class RuntimeState:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as db:
             db.executescript('''
-                CREATE TABLE IF NOT EXISTS transport_state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS transport_state (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS telegram_inbox (
-                    id INTEGER PRIMARY KEY, payload TEXT NOT NULL,
+                    id INTEGER PRIMARY KEY,
+                    payload TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'pending',
-                    attempts INTEGER NOT NULL DEFAULT 0, retry_at REAL NOT NULL DEFAULT 0);
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    retry_at REAL NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS telegram_outbox (
+                    update_id INTEGER PRIMARY KEY,
+                    chat_id TEXT NOT NULL,
+                    response_json TEXT NOT NULL,
+                    next_part INTEGER NOT NULL DEFAULT 0,
+                    created_at REAL NOT NULL,
+                    FOREIGN KEY(update_id) REFERENCES telegram_inbox(id)
+                        ON DELETE CASCADE
+                );
+                CREATE TABLE IF NOT EXISTS telegram_delivery_receipts (
+                    update_id INTEGER NOT NULL,
+                    part_index INTEGER NOT NULL,
+                    telegram_message_id INTEGER,
+                    delivered_at REAL NOT NULL,
+                    PRIMARY KEY(update_id, part_index),
+                    FOREIGN KEY(update_id) REFERENCES telegram_outbox(update_id)
+                        ON DELETE CASCADE
+                );
             ''')
+            columns = {
+                row[1]
+                for row in db.execute('PRAGMA table_info(telegram_inbox)').fetchall()
+            }
+            if 'last_error' not in columns:
+                db.execute('ALTER TABLE telegram_inbox ADD COLUMN last_error TEXT')
 
     @contextmanager
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=15)
+        conn.execute('PRAGMA foreign_keys=ON')
+        conn.execute('PRAGMA busy_timeout=15000')
         try:
             yield conn
             conn.commit()
@@ -46,46 +82,225 @@ class RuntimeState:
 
     def get(self, key, default=None):
         with self.connect() as db:
-            row = db.execute('SELECT value FROM transport_state WHERE key=?', (key,)).fetchone()
+            row = db.execute(
+                'SELECT value FROM transport_state WHERE key=?', (key,)
+            ).fetchone()
         return json.loads(row[0]) if row else default
 
     def put(self, key, value):
         with self.connect() as db:
-            db.execute('INSERT OR REPLACE INTO transport_state VALUES (?,?)', (key, json.dumps(value)))
+            db.execute(
+                'INSERT OR REPLACE INTO transport_state VALUES (?,?)',
+                (key, json.dumps(value)),
+            )
 
     def remember(self, user, query, response):
         key = f'history:{user}'
         history = self.get(key, [])
-        history.extend([{'role': 'user', 'content': query}, {'role': 'assistant', 'content': response}])
+        history.extend([
+            {'role': 'user', 'content': query},
+            {'role': 'assistant', 'content': response},
+        ])
         self.put(key, history[-12:])
 
     def enqueue(self, update):
         ident = int(update['update_id'])
         with self.connect() as db:
-            db.execute('INSERT OR IGNORE INTO telegram_inbox(id,payload) VALUES (?,?)',
-                       (ident, json.dumps(update)))
-            previous = db.execute("SELECT value FROM transport_state WHERE key='offset'").fetchone()
+            db.execute(
+                'INSERT OR IGNORE INTO telegram_inbox(id,payload) VALUES (?,?)',
+                (ident, json.dumps(update)),
+            )
+            previous = db.execute(
+                "SELECT value FROM transport_state WHERE key='offset'"
+            ).fetchone()
             offset = max(ident + 1, json.loads(previous[0]) if previous else 0)
-            db.execute("INSERT OR REPLACE INTO transport_state VALUES ('offset',?)", (json.dumps(offset),))
+            db.execute(
+                "INSERT OR REPLACE INTO transport_state VALUES ('offset',?)",
+                (json.dumps(offset),),
+            )
 
     def next_update(self):
+        now = time.time()
         with self.connect() as db:
-            row = db.execute("SELECT id,payload,attempts,retry_at FROM telegram_inbox "
-                             "WHERE status='pending' ORDER BY id LIMIT 1").fetchone()
-        if not row or row[3] > time.time():
+            row = db.execute(
+                "SELECT id,payload,attempts FROM telegram_inbox "
+                "WHERE status IN ('pending','ready','retry_wait') "
+                "AND retry_at<=? ORDER BY id LIMIT 1",
+                (now,),
+            ).fetchone()
+        if not row:
             return None
         return row[0], json.loads(row[1]), row[2]
 
+    def stage_delivery(self, ident, plan):
+        """Persist an immutable delivery plan before the first outbound call."""
+        parts = plan.get('parts') if isinstance(plan, dict) else None
+        if not isinstance(parts, list):
+            raise ValueError('Delivery plan must contain an ordered parts list.')
+        chat_id = str(plan.get('chat_id') or '')
+        payload = json.dumps(plan, ensure_ascii=False, sort_keys=True)
+        with self.connect() as db:
+            existing = db.execute(
+                'SELECT response_json FROM telegram_outbox WHERE update_id=?',
+                (ident,),
+            ).fetchone()
+            if existing and existing[0] != payload:
+                raise RuntimeError('Delivery plan is immutable once staged.')
+            db.execute(
+                'INSERT OR IGNORE INTO telegram_outbox('
+                'update_id,chat_id,response_json,next_part,created_at'
+                ') VALUES (?,?,?,?,?)',
+                (ident, chat_id, payload, 0, time.time()),
+            )
+            if parts:
+                db.execute(
+                    "UPDATE telegram_inbox SET status='ready',retry_at=0,last_error=NULL "
+                    'WHERE id=?',
+                    (ident,),
+                )
+            else:
+                db.execute(
+                    "UPDATE telegram_inbox SET status='done',payload='{}',"
+                    'retry_at=0,last_error=NULL WHERE id=?',
+                    (ident,),
+                )
+
+    def get_delivery(self, ident):
+        with self.connect() as db:
+            row = db.execute(
+                'SELECT chat_id,response_json,next_part FROM telegram_outbox '
+                'WHERE update_id=?',
+                (ident,),
+            ).fetchone()
+        if not row:
+            return None
+        plan = json.loads(row[1])
+        return {
+            'update_id': ident,
+            'chat_id': row[0],
+            'parts': plan.get('parts', []),
+            'next_part': row[2],
+        }
+
+    def next_delivery_part(self, ident):
+        delivery = self.get_delivery(ident)
+        if not delivery:
+            return None
+        index = delivery['next_part']
+        parts = delivery['parts']
+        if index >= len(parts):
+            return None
+        part = dict(parts[index])
+        part['part_index'] = index
+        return part
+
+    def confirm_delivery_part(self, ident, part_index, message_id=None):
+        """Checkpoint one confirmed part; duplicate confirmations are harmless."""
+        with self.connect() as db:
+            row = db.execute(
+                'SELECT response_json,next_part FROM telegram_outbox WHERE update_id=?',
+                (ident,),
+            ).fetchone()
+            if not row:
+                raise RuntimeError('Delivery plan not found.')
+            plan = json.loads(row[0])
+            total = len(plan.get('parts', []))
+            current = int(row[1])
+            if part_index < current:
+                return
+            if part_index != current:
+                raise RuntimeError('Cannot skip an unconfirmed delivery part.')
+            db.execute(
+                'INSERT OR IGNORE INTO telegram_delivery_receipts('
+                'update_id,part_index,telegram_message_id,delivered_at'
+                ') VALUES (?,?,?,?)',
+                (ident, part_index, message_id, time.time()),
+            )
+            db.execute(
+                'UPDATE telegram_outbox SET next_part=? '
+                'WHERE update_id=? AND next_part=?',
+                (current + 1, ident, current),
+            )
+            if current + 1 >= total:
+                db.execute(
+                    "UPDATE telegram_inbox SET status='done',payload='{}',"
+                    'retry_at=0,last_error=NULL WHERE id=?',
+                    (ident,),
+                )
+            else:
+                db.execute(
+                    "UPDATE telegram_inbox SET status='ready',retry_at=0,last_error=NULL "
+                    'WHERE id=?',
+                    (ident,),
+                )
+
+    def complete_delivery(self, ident):
+        delivery = self.get_delivery(ident)
+        if not delivery:
+            raise RuntimeError('Delivery plan not found.')
+        if delivery['next_part'] != len(delivery['parts']):
+            raise RuntimeError('Cannot complete an update with pending delivery parts.')
+        with self.connect() as db:
+            db.execute(
+                "UPDATE telegram_inbox SET status='done',payload='{}',"
+                'retry_at=0,last_error=NULL WHERE id=?',
+                (ident,),
+            )
+
+    def fail_delivery(self, ident, error, retry_delay=RETRY_DELAY_SECONDS):
+        """Schedule the same immutable plan; never replace it with the error."""
+        with self.connect() as db:
+            row = db.execute(
+                'SELECT attempts FROM telegram_inbox WHERE id=?', (ident,)
+            ).fetchone()
+            if not row:
+                raise RuntimeError('Inbox update not found.')
+            attempts = int(row[0]) + 1
+            status = 'failed' if attempts >= MAX_DELIVERY_ATTEMPTS else 'retry_wait'
+            db.execute(
+                'UPDATE telegram_inbox SET attempts=?,status=?,retry_at=?,last_error=? '
+                'WHERE id=?',
+                (
+                    attempts,
+                    status,
+                    time.time() + max(0, retry_delay),
+                    str(error)[:500],
+                    ident,
+                ),
+            )
+        return status
+
+    def redrive_delivery(self, ident):
+        with self.connect() as db:
+            if not db.execute(
+                'SELECT 1 FROM telegram_outbox WHERE update_id=?', (ident,)
+            ).fetchone():
+                raise RuntimeError('Delivery plan not found.')
+            db.execute(
+                "UPDATE telegram_inbox SET status='ready',attempts=0,retry_at=0,"
+                'last_error=NULL WHERE id=?',
+                (ident,),
+            )
+
     def finish(self, ident, success):
+        """Compatibility path for non-production runners."""
         with self.connect() as db:
             if success:
-                db.execute("UPDATE telegram_inbox SET status='done',payload='{}' WHERE id=?", (ident,))
+                db.execute(
+                    "UPDATE telegram_inbox SET status='done',payload='{}' WHERE id=?",
+                    (ident,),
+                )
             else:
-                db.execute("UPDATE telegram_inbox SET attempts=attempts+1,retry_at=?,"
-                           "status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'pending' END WHERE id=?",
-                           (time.time() + 15, ident))
-            db.execute("DELETE FROM telegram_inbox WHERE status='done' AND id < "
-                       "(SELECT COALESCE(MAX(id),0)-1000 FROM telegram_inbox)")
+                db.execute(
+                    "UPDATE telegram_inbox SET attempts=attempts+1,retry_at=?,"
+                    "status=CASE WHEN attempts>=2 THEN 'failed' ELSE 'pending' END "
+                    'WHERE id=?',
+                    (time.time() + RETRY_DELAY_SECONDS, ident),
+                )
+            db.execute(
+                "DELETE FROM telegram_inbox WHERE status='done' AND id < "
+                '(SELECT COALESCE(MAX(id),0)-1000 FROM telegram_inbox)'
+            )
 
 
 def process_request(brain, query, upload_root, images=None, audio_path=None, **kwargs):
@@ -97,7 +312,9 @@ def process_request(brain, query, upload_root, images=None, audio_path=None, **k
         with tempfile.TemporaryDirectory(prefix='brain-audio-') as derived:
             result = AudioExtractor().extract(path, 'voice', Path(derived))
         if not result.success or not result.raw_text.strip():
-            raise ValueError('Не удалось распознать аудио. Проверь запись и установку Whisper/FFmpeg.')
+            raise ValueError(
+                'Не удалось распознать аудио. Проверь запись и установку Whisper/FFmpeg.'
+            )
         query += '\nТранскрипт пользователя:\n' + result.raw_text
     if len(images or []) > 4:
         raise ValueError('Прикрепи не больше четырёх фотографий за раз.')
@@ -105,9 +322,13 @@ def process_request(brain, query, upload_root, images=None, audio_path=None, **k
         path = confined_file(image, upload_root)
         result = brain.shooting_engine.critique_shot(str(path), prompt=query)
         if result.get('status') != 'AVAILABLE' or not result.get('description'):
-            raise ValueError('Анализ изображения недоступен. Проверь ключ и доступность модели.')
+            raise ValueError(
+                'Анализ изображения недоступен. Проверь ключ и доступность модели.'
+            )
         query += '\nРезультат анализа приложенного изображения:\n' + result['description']
     result = brain.process_chat(query=query, **kwargs)
     if result.get('status_code') != 200 or not result.get('response'):
-        raise RuntimeError('Модель не ответила. Проверь ключ, квоту и выбранную модель, затем повтори запрос.')
+        raise RuntimeError(
+            'Модель не ответила. Проверь ключ, квоту и выбранную модель, затем повтори запрос.'
+        )
     return result
