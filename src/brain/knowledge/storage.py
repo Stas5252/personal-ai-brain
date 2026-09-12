@@ -1,23 +1,24 @@
-"""
-Storage and Deduplication Manager for Knowledge Ingestion Factory.
-Handles file validation, SHA-256 deduplication, perceptual hashing for images,
-and organized original / derived storage.
-"""
+"""Storage, validation, and deduplication for knowledge ingestion."""
+from __future__ import annotations
+
+import hashlib
 import os
 import re
 import shutil
-import hashlib
 from pathlib import Path
-from typing import Optional, Dict, Any, Tuple
+from typing import Any, Dict, Optional, Tuple
+
 from PIL import Image
 
 from src.brain.config import (
-    ORIGINALS_DIR, DERIVED_DIR, MAX_FILE_SIZE_BYTES,
-    ALLOWED_EXTENSIONS, ALLOWED_DOCUMENT_EXTENSIONS,
-    ALLOWED_IMAGE_EXTENSIONS, ALLOWED_AUDIO_EXTENSIONS, ALLOWED_VIDEO_EXTENSIONS
+    ALLOWED_EXTENSIONS,
+    ALLOWED_IMAGE_EXTENSIONS,
+    DERIVED_DIR,
+    MAX_FILE_SIZE_BYTES,
+    ORIGINALS_DIR,
 )
-from src.brain.models.file_metadata import FileValidationResult
 from src.brain.db import get_connection
+from src.brain.models.file_metadata import FileValidationResult
 
 MIME_MAP = {
     ".pdf": "application/pdf",
@@ -45,6 +46,7 @@ MIME_MAP = {
     ".webm": "video/webm",
 }
 
+
 class StorageManager:
     def __init__(self, originals_dir: Path = ORIGINALS_DIR, derived_dir: Path = DERIVED_DIR):
         self.originals_dir = Path(originals_dir)
@@ -55,254 +57,212 @@ class StorageManager:
 
     @staticmethod
     def sanitize_filename(filename: str) -> str:
-        """Strips path traversal components and unsafe characters."""
-        base_name = os.path.basename(filename).strip()
-        # Remove any path separators
-        base_name = re.sub(r"[\\/]", "", base_name)
-        # Allow alphanumeric, cyrillic, underscores, dots, hyphens, and spaces
-        safe_name = re.sub(r"[^\w\s.-]", "_", base_name, flags=re.UNICODE).strip()
-        if not safe_name or safe_name in [".", ".."]:
+        """Return a portable basename without traversal or hidden dot-runs."""
+        # pathlib/os.path only recognize separators of the host OS. Treat both
+        # slash styles as separators so Windows payloads are safe on Linux too.
+        base_name = re.split(r"[\\/]", str(filename or ""))[-1].strip()
+        safe_name = re.sub(r"[^\w\s.-]", "_", base_name, flags=re.UNICODE)
+        safe_name = re.sub(r"\.{2,}", ".", safe_name)
+        safe_name = re.sub(r"\s+", " ", safe_name).strip(" .")
+        if not safe_name:
             safe_name = "unnamed_source"
-        return safe_name
+        return safe_name[:240]
 
     @staticmethod
     def compute_sha256(file_path: Path) -> str:
-        """Calculates SHA-256 hash of file contents in chunks."""
-        h = hashlib.sha256()
-        with open(file_path, "rb") as f:
-            while chunk := f.read(65536):
-                h.update(chunk)
-        return h.hexdigest()
+        digest = hashlib.sha256()
+        with open(file_path, "rb") as source:
+            while chunk := source.read(65536):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     @staticmethod
     def compute_image_phash(file_path: Path) -> Optional[str]:
-        """Calculates 64-bit perceptual average hash for image deduplication."""
         try:
-            with Image.open(file_path) as img:
-                img = img.convert("L").resize((8, 8), Image.Resampling.LANCZOS)
-                pixels = list(img.tobytes())
-                avg = sum(pixels) / len(pixels)
-                bits = "".join("1" if p > avg else "0" for p in pixels)
-                # Convert 64 bits to 16 hex digits
+            with Image.open(file_path) as image:
+                image = image.convert("L").resize((8, 8), Image.Resampling.LANCZOS)
+                pixels = list(image.tobytes())
+                average = sum(pixels) / len(pixels)
+                bits = "".join("1" if pixel > average else "0" for pixel in pixels)
                 return f"{int(bits, 2):016x}"
         except Exception:
             return None
 
-    # Alias for test compatibility
     compute_phash = compute_image_phash
 
     @staticmethod
     def validate_magic_bytes(file_path: Path, ext: str) -> Tuple[bool, Optional[str]]:
-        """Validates file magic signature bytes against declared extension and rejects malicious payloads."""
         try:
-            with open(file_path, "rb") as f:
-                header = f.read(512)
-        except Exception as e:
-            return False, f"Cannot read file header: {str(e)}"
-
+            with open(file_path, "rb") as source:
+                header = source.read(512)
+        except Exception as exc:
+            return False, f"Cannot read file header: {exc}"
         if not header:
             return False, "File is empty (0 bytes)."
-
-        # Reject executable / binary payloads disguised as documents
-        if header.startswith(b"MZ") or header.startswith(b"\x7fELF") or header.startswith(b"\xca\xfe\xba\xbe"):
+        if header.startswith((b"MZ", b"\x7fELF", b"\xca\xfe\xba\xbe")):
             return False, "Dangerous executable payload disguised as document/media."
 
-        ext_lower = ext.lower()
-        if ext_lower == ".pdf":
-            if not header.startswith(b"%PDF"):
-                return False, "Invalid PDF magic bytes header (expected '%PDF')."
-        elif ext_lower == ".png":
-            if not header.startswith(b"\x89PNG\r\n\x1a\n"):
-                return False, "Invalid PNG magic bytes header."
-        elif ext_lower in [".jpg", ".jpeg"]:
-            if not header.startswith(b"\xff\xd8\xff"):
-                return False, "Invalid JPEG magic bytes header."
-        elif ext_lower == ".webp":
-            if not (header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WEBP"):
-                return False, "Invalid WEBP magic bytes header."
-        elif ext_lower in [".tiff", ".tif"]:
-            if not (header.startswith(b"II*\x00") or header.startswith(b"MM\x00*")):
-                return False, "Invalid TIFF magic bytes header."
-        elif ext_lower in [".docx", ".pptx", ".xlsx"]:
-            if not header.startswith(b"PK\x03\x04"):
-                return False, f"Invalid Office document archive magic bytes (expected ZIP PK header for {ext})."
-        elif ext_lower == ".wav":
-            if not (header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WAVE"):
-                return False, "Invalid WAV magic bytes header."
-        elif ext_lower == ".ogg":
-            if not header.startswith(b"OggS"):
-                return False, "Invalid OGG magic bytes header."
-        elif ext_lower == ".flac":
-            if not header.startswith(b"fLaC"):
-                return False, "Invalid FLAC magic bytes header."
-        elif ext_lower in [".mp4", ".mov", ".mkv", ".webm"]:
-            if ext_lower in [".mp4", ".mov"] and b"ftyp" not in header[:64] and not header.startswith(b"\x00\x00\x00"):
-                return False, "Invalid MP4/MOV container magic bytes."
-            elif ext_lower in [".mkv", ".webm"] and not header.startswith(b"\x1a\x45\xdf\xa3"):
-                return False, "Invalid Matroska/WebM container magic bytes."
-        elif ext_lower in [".txt", ".md", ".html", ".htm"]:
-            if b"\x00" in header:
-                return False, f"Binary null bytes detected in text file ({ext})."
-
+        extension = ext.lower()
+        if extension == ".pdf" and not header.startswith(b"%PDF"):
+            return False, "Invalid PDF magic bytes header (expected '%PDF')."
+        if extension == ".png" and not header.startswith(b"\x89PNG\r\n\x1a\n"):
+            return False, "Invalid PNG magic bytes header."
+        if extension in {".jpg", ".jpeg"} and not header.startswith(b"\xff\xd8\xff"):
+            return False, "Invalid JPEG magic bytes header."
+        if extension == ".webp" and not (
+            header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WEBP"
+        ):
+            return False, "Invalid WEBP magic bytes header."
+        if extension in {".tiff", ".tif"} and not (
+            header.startswith(b"II*\x00") or header.startswith(b"MM\x00*")
+        ):
+            return False, "Invalid TIFF magic bytes header."
+        if extension in {".docx", ".pptx", ".xlsx"} and not header.startswith(b"PK\x03\x04"):
+            return False, f"Invalid Office document archive magic bytes for {extension}."
+        if extension == ".wav" and not (
+            header.startswith(b"RIFF") and len(header) >= 12 and header[8:12] == b"WAVE"
+        ):
+            return False, "Invalid WAV magic bytes header."
+        if extension == ".ogg" and not header.startswith(b"OggS"):
+            return False, "Invalid OGG magic bytes header."
+        if extension == ".flac" and not header.startswith(b"fLaC"):
+            return False, "Invalid FLAC magic bytes header."
+        if extension in {".mp4", ".mov"} and b"ftyp" not in header[:64] and not header.startswith(b"\x00\x00\x00"):
+            return False, "Invalid MP4/MOV container magic bytes."
+        if extension in {".mkv", ".webm"} and not header.startswith(b"\x1a\x45\xdf\xa3"):
+            return False, "Invalid Matroska/WebM container magic bytes."
+        if extension in {".txt", ".md", ".html", ".htm"} and b"\x00" in header:
+            return False, f"Binary null bytes detected in text file ({extension})."
         return True, None
 
     def validate_file(self, file_path: Path, original_filename: Optional[str] = None) -> FileValidationResult:
-        """Validates file existence, size, extension, magic signature bytes, and safe path."""
-        p = Path(file_path)
-        if not p.exists() or not p.is_file():
-            return FileValidationResult(is_valid=False, error_message=f"File not found: {p}")
-
-        orig_name = original_filename or p.name
-        safe_name = self.sanitize_filename(orig_name)
-        ext = os.path.splitext(safe_name)[1].lower()
-
-        if ext not in ALLOWED_EXTENSIONS:
+        path = Path(file_path)
+        if not path.exists() or not path.is_file():
+            return FileValidationResult(is_valid=False, error_message=f"File not found: {path}")
+        original_name = original_filename or path.name
+        safe_name = self.sanitize_filename(original_name)
+        extension = Path(safe_name).suffix.lower()
+        if extension not in ALLOWED_EXTENSIONS:
             return FileValidationResult(
                 is_valid=False,
-                error_message=f"Unsupported file extension '{ext}'. Allowed: {sorted(list(ALLOWED_EXTENSIONS))}"
+                error_message=f"Unsupported file extension '{extension}'. Allowed: {sorted(ALLOWED_EXTENSIONS)}",
             )
-
-        # Check for in-progress downloads or incomplete files
-        name_lower = (original_filename or p.name).lower()
-        for marker in [".crdownload", ".part", ".tmp", ".downloading", ".incomplete"]:
-            if name_lower.endswith(marker):
+        lowered = original_name.lower()
+        for marker in (".crdownload", ".part", ".tmp", ".downloading", ".incomplete"):
+            if lowered.endswith(marker):
                 return FileValidationResult(
                     is_valid=False,
-                    error_message=f"File is currently downloading or incomplete ({marker})."
+                    error_message=f"File is currently downloading or incomplete ({marker}).",
                 )
-
-        # Handle active file leasing or exclusive locks from downloading processes
         try:
-            with open(p, "rb") as f_check:
-                f_check.read(1024)
-        except PermissionError as pe:
+            with open(path, "rb") as source:
+                source.read(1024)
+        except PermissionError as exc:
             return FileValidationResult(
-                is_valid=False,
-                error_message=f"File is currently locked by another process (in-progress download or lease): {pe}"
+                is_valid=False, error_message=f"File is locked by another process: {exc}"
             )
-        except OSError as oe:
-            return FileValidationResult(
-                is_valid=False,
-                error_message=f"File access failed (possibly active download write): {oe}"
-            )
-
-        file_size = p.stat().st_size
-        if file_size <= 0:
+        except OSError as exc:
+            return FileValidationResult(is_valid=False, error_message=f"File access failed: {exc}")
+        size = path.stat().st_size
+        if size <= 0:
             return FileValidationResult(is_valid=False, error_message="File is empty (0 bytes).")
-
-        if file_size > self.max_file_size_bytes:
+        if size > self.max_file_size_bytes:
             return FileValidationResult(
                 is_valid=False,
-                error_message=f"File size ({file_size} bytes) exceeds maximum allowed size ({self.max_file_size_bytes} bytes)."
+                error_message=f"File size ({size} bytes) exceeds maximum ({self.max_file_size_bytes} bytes).",
             )
-
-        # Magic bytes signature validation
-        magic_ok, magic_err = self.validate_magic_bytes(p, ext)
-        if not magic_ok:
-            return FileValidationResult(is_valid=False, error_message=f"File validation failed: {magic_err}")
-
-        sha256 = self.compute_sha256(p)
-        mime_type = MIME_MAP.get(ext, "application/octet-stream")
-
-        p_hash = None
-        if ext in ALLOWED_IMAGE_EXTENSIONS:
-            p_hash = self.compute_image_phash(p)
-
+        valid, error = self.validate_magic_bytes(path, extension)
+        if not valid:
+            return FileValidationResult(is_valid=False, error_message=f"File validation failed: {error}")
+        sha256 = self.compute_sha256(path)
+        perceptual_hash = self.compute_image_phash(path) if extension in ALLOWED_IMAGE_EXTENSIONS else None
         return FileValidationResult(
             is_valid=True,
-            mime_type=mime_type,
-            extension=ext,
-            file_size=file_size,
+            mime_type=MIME_MAP.get(extension, "application/octet-stream"),
+            extension=extension,
+            file_size=size,
             sha256=sha256,
-            p_hash=p_hash,
-            safe_filename=safe_name
+            p_hash=perceptual_hash,
+            safe_filename=safe_name,
         )
 
     def check_duplicate(self, sha256: str, exclude_source_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
-        """Checks if a completed source with identical SHA-256 already exists in database."""
-        conn = get_connection()
-        c = conn.cursor()
+        connection = get_connection()
+        cursor = connection.cursor()
         if exclude_source_id:
-            c.execute("""
-            SELECT * FROM knowledge_sources
-            WHERE sha256 = ? AND ingestion_status IN ('COMPLETED', 'DUPLICATE') AND source_id != ?
-            """, (sha256, exclude_source_id))
+            cursor.execute(
+                "SELECT * FROM knowledge_sources WHERE sha256 = ? "
+                "AND ingestion_status IN ('COMPLETED', 'DUPLICATE') AND source_id != ?",
+                (sha256, exclude_source_id),
+            )
         else:
-            c.execute("""
-            SELECT * FROM knowledge_sources
-            WHERE sha256 = ? AND ingestion_status IN ('COMPLETED', 'DUPLICATE')
-            """, (sha256,))
-        row = c.fetchone()
-        conn.close()
-        if row:
-            return dict(row)
-        return None
+            cursor.execute(
+                "SELECT * FROM knowledge_sources WHERE sha256 = ? "
+                "AND ingestion_status IN ('COMPLETED', 'DUPLICATE')",
+                (sha256,),
+            )
+        row = cursor.fetchone()
+        connection.close()
+        return dict(row) if row else None
 
     def record_duplicate_encounter(self, source_id: str):
-        """Increments seen_count for an existing duplicate source."""
-        conn = get_connection()
-        c = conn.cursor()
-        c.execute("UPDATE knowledge_sources SET seen_count = seen_count + 1 WHERE source_id = ?", (source_id,))
-        conn.commit()
-        conn.close()
+        connection = get_connection()
+        connection.execute(
+            "UPDATE knowledge_sources SET seen_count = seen_count + 1 WHERE source_id = ?",
+            (source_id,),
+        )
+        connection.commit()
+        connection.close()
 
     def store_original(self, file_path: Path, sha256: str, safe_name: str) -> Path:
-        """Stores immutable copy of original file under structured sha256 directory."""
-        prefix_dir = self.originals_dir / sha256[:2] / sha256[2:4]
-        prefix_dir.mkdir(parents=True, exist_ok=True)
-        dest_path = prefix_dir / f"{sha256}_{safe_name}"
-
-        if not dest_path.exists():
+        prefix = self.originals_dir / sha256[:2] / sha256[2:4]
+        prefix.mkdir(parents=True, exist_ok=True)
+        destination = prefix / f"{sha256}_{safe_name}"
+        if not destination.exists():
             try:
-                os.link(file_path, dest_path)
+                os.link(file_path, destination)
             except Exception:
-                shutil.copy2(file_path, dest_path)
-
-        # Copy any companion sidecar files (.json) from source directory
-        stem = file_path.stem
-        for sc in file_path.parent.glob(f"{stem}*.json"):
-            dest_sc = prefix_dir / sc.name
+                shutil.copy2(file_path, destination)
+        stem = Path(file_path).stem
+        for sidecar in Path(file_path).parent.glob(f"{stem}*.json"):
+            target = prefix / self.sanitize_filename(sidecar.name)
             try:
-                if not dest_sc.exists():
+                if not target.exists():
                     try:
-                        os.link(sc, dest_sc)
+                        os.link(sidecar, target)
                     except Exception:
-                        shutil.copy2(sc, dest_sc)
+                        shutil.copy2(sidecar, target)
             except Exception:
-                pass
-
-        return dest_path
+                continue
+        return destination
 
     def get_derived_dir(self, source_id: str) -> Path:
-        """Returns dedicated directory for extracted keyframes, transcripts, and temporary artifacts."""
-        d = self.derived_dir / source_id
-        d.mkdir(parents=True, exist_ok=True)
-        return d
+        directory = self.derived_dir / source_id
+        directory.mkdir(parents=True, exist_ok=True)
+        return directory
 
     def delete_source_files(self, source_id: str):
-        """Cleans up derived directory for the given source."""
-        d = self.derived_dir / source_id
-        if d.exists():
-            shutil.rmtree(d, ignore_errors=True)
+        directory = self.derived_dir / source_id
+        if directory.exists():
+            shutil.rmtree(directory, ignore_errors=True)
 
     def is_safe_storage_path(self, target_path: Path, base_dir: Optional[Path] = None) -> bool:
-        """Verifies that target_path strictly resolves within STORAGE_DIR/DATA_DIR and not outside."""
         return is_safe_storage_path(target_path, base_dir or self.originals_dir.parent)
 
+
 def is_safe_storage_path(target_path: Path, base_dir: Optional[Path] = None) -> bool:
-    """Verifies that target_path strictly resolves within base_dir (or DATA_DIR) and not outside."""
     try:
         resolved = Path(target_path).resolve()
         if base_dir is None:
             from src.brain.config import DATA_DIR
-            base_dir = Path(DATA_DIR).resolve()
+
+            base = Path(DATA_DIR).resolve()
         else:
-            base_dir = Path(base_dir).resolve()
-        return base_dir in resolved.parents or resolved == base_dir
+            base = Path(base_dir).resolve()
+        return resolved == base or base in resolved.parents
     except Exception:
         return False
 
-def validate_magic_bytes(file_path: Path, ext: str) -> Tuple[bool, Optional[str]]:
-    """Module-level helper for magic bytes validation."""
-    return StorageManager.validate_magic_bytes(file_path, ext)
 
+def validate_magic_bytes(file_path: Path, ext: str) -> Tuple[bool, Optional[str]]:
+    return StorageManager.validate_magic_bytes(file_path, ext)
