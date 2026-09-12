@@ -1,4 +1,4 @@
-"""Durable knowledge ingestion worker with heartbeat and lease fencing."""
+"""Durable knowledge ingestion worker with end-to-end lease fencing."""
 from __future__ import annotations
 
 import argparse
@@ -6,7 +6,7 @@ import json
 import logging
 import os
 import signal
-import sys
+import sqlite3
 import threading
 import time
 import uuid
@@ -15,6 +15,13 @@ from typing import Any, Dict, Optional
 
 from src.brain.db import get_connection
 from src.brain.knowledge.factory import KnowledgeIngestionFactory
+from src.brain.knowledge.fenced_ingestion import ingest_file_fenced
+from src.brain.knowledge.queue.fencing import (
+    LeaseLostError,
+    fail_owned,
+    finalize,
+    make_fence,
+)
 from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
 from src.brain.models.knowledge import IngestionJob
 
@@ -58,6 +65,13 @@ class IngestionWorker:
                         self._lease_lost.set()
                         logger.error("Lease lost for ingestion job %s", job.job_id)
                         return
+                except sqlite3.OperationalError as exc:
+                    if "locked" in str(exc).lower():
+                        logger.warning("Heartbeat delayed by fenced writer lock for %s", job.job_id)
+                        continue
+                    self._lease_lost.set()
+                    logger.exception("Heartbeat failed for ingestion job %s", job.job_id)
+                    return
                 except Exception:
                     self._lease_lost.set()
                     logger.exception("Heartbeat failed for ingestion job %s", job.job_id)
@@ -77,7 +91,9 @@ class IngestionWorker:
             job.job_id, self.worker_id, job.lease_token
         ):
             self._lease_lost.set()
-            raise RuntimeError("Ingestion lease was lost; stale worker is fenced")
+            raise LeaseLostError(
+                f"Ingestion lease lost for job {job.job_id}; stale worker is fenced"
+            )
 
     def _fail_owned_job(self, job: IngestionJob, message: str) -> bool:
         try:
@@ -92,10 +108,11 @@ class IngestionWorker:
             return False
 
     def process_job(self, job: IngestionJob) -> bool:
-        """Process a claimed job; only its current token may mutate queue state."""
+        """Process one exact lease attempt and never fail a reclaimed attempt."""
         if job.worker_id != self.worker_id or job.lease_token <= 0:
             raise ValueError("worker may process only a job claimed with its current lease token")
         self._current_job = job
+        fence = make_fence(job)
         connection = get_connection()
         try:
             row = connection.execute(
@@ -119,16 +136,6 @@ class IngestionWorker:
         self._start_heartbeat(job)
         try:
             self._require_live_lease(job)
-            if not self.queue.update_progress(
-                job.job_id,
-                "EXTRACTING",
-                0.3,
-                checkpoint_stage="EXTRACTING",
-                worker_id=self.worker_id,
-                lease_token=job.lease_token,
-            ):
-                raise RuntimeError("Lease lost before ingestion started")
-
             metadata: Dict[str, Any] = {}
             raw_metadata = row["metadata_json"]
             if raw_metadata and isinstance(raw_metadata, str):
@@ -139,21 +146,23 @@ class IngestionWorker:
                 except json.JSONDecodeError:
                     logger.warning("Ignoring invalid source metadata JSON for %s", job.source_id)
 
-            # Queue state is updated only through the fenced queue API. Source
-            # pipeline checkpoints remain source-local and idempotent.
-            self.factory.ingest_file(
+            ingest_file_fenced(
+                self.factory,
+                queue=self.queue,
+                fence=fence,
                 file_path=file_path,
                 title=row["title"],
                 metadata=metadata,
-                source_id=job.source_id,
+                lease_seconds=self.lease_seconds,
             )
             self._require_live_lease(job)
-            if not self.queue.complete_job(job.job_id, self.worker_id, job.lease_token):
-                raise RuntimeError("Lease lost before completion could be committed")
-            return True
+            return finalize(self.queue, fence)
+        except LeaseLostError:
+            logger.warning("Stale ingestion worker fenced for job %s", job.job_id)
+            return False
         except Exception as exc:
             logger.exception("Ingestion job %s failed", job.job_id)
-            self._fail_owned_job(job, str(exc))
+            fail_owned(self.queue, fence, str(exc))
             return False
         finally:
             self._stop_heartbeat_loop()
