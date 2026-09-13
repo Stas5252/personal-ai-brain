@@ -84,7 +84,15 @@ class GuidedActionService:
     @staticmethod
     def _chat(brain, task, text=""):
         result = brain.process_chat(query=f"{task}\n\nВходные данные:\n{text}".strip(), auto_admission=False)
-        if result.get("status_code") != 200: raise RuntimeError("LLM request failed")
+        if result.get("status_code") != 200:
+            reason = result.get("error") or result.get("response") or ""
+            raise RuntimeError(
+                f"⚠️ Нейросеть сейчас недоступна.\n\n"
+                f"Проверьте, что `GEMINI_API_KEY` указан в `.env` и лимит запросов не исчерпан.\n"
+                f"Детали: {reason}" if reason else
+                "⚠️ Нейросеть сейчас недоступна.\n\n"
+                "Проверьте, что `GEMINI_API_KEY` указан в `.env` и лимит запросов не исчерпан."
+            )
         return {"result": result.get("response", "")}
 
     @staticmethod

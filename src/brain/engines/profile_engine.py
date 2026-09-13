@@ -181,11 +181,23 @@ class ProfileEngine:
         forbidden_topics = []
         for item in forbidden_raw.replace(";", ",").split(","):
             cleaned = item.replace("Не использовать:", "").replace("не использовать", "").strip().strip("'\"")
+            # Strip natural phrases like "не люблю слово", "без слов", etc.
+            import re
+            m = re.sub(
+                r"^(?:не\s+(?:люблю|нравится|использовать|пиши|надо|употребляй)|без|запрещено)\s*(?:слов[аоуые]?|фраз[ауые]|выражени[еяй]|штамп[аоуые]?)*\s*",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip().strip("'\"«»")
+            if m:
+                cleaned = m
             if cleaned:
                 if len(cleaned.split()) > 3:
                     forbidden_topics.append(cleaned)
                 else:
                     forbidden_words.append(cleaned)
+        forbidden_words = list(dict.fromkeys(forbidden_words))
+        forbidden_topics = list(dict.fromkeys(forbidden_topics))
         goals_list = [g.strip() for g in answers.get("goals", "").replace(";", ",").split(",") if g.strip()]
         return UserProfile(
             identity=answers.get("identity", ""),
@@ -298,6 +310,33 @@ class ProfileEngine:
                 raw_p = re.sub(r"[\s\u00a0]", "", m_price.group(1))
                 if raw_p.isdigit() and int(raw_p) >= 500:
                     extracted_data["pricing"] = {"Базовый": f"{m_price.group(1).strip()} руб"}
+        # Forbidden words fallback: catch phrases like
+        # "не люблю слово красотка", "убери волшебство и уникальный"
+        if not extracted_data.get("forbidden_words"):
+            bans: list[str] = []
+            # Pattern 1: "не люблю слово X" / "не пиши слово X"
+            for m in re.finditer(
+                r"(?:не\s+(?:люблю|нравится|пиши|используй|надо|нужно))\s+"
+                r"(?:слов[оа]|фраз[уы]|выражени[ея])?\s*[«\"']?([^»\"',;.\n]+)[»\"']?",
+                text, re.IGNORECASE,
+            ):
+                for word in re.split(r"\s+и\s+|\s*,\s*", m.group(1)):
+                    w = word.strip().strip("«»\"'")
+                    w = re.sub(r"^(?:слов[аоуые]?|фраз[ауые]|выражени[еяй])\s+", "", w, flags=re.IGNORECASE).strip()
+                    if w and len(w) >= 2:
+                        bans.append(w)
+            # Pattern 2: "убери слово X" / "без слова X"
+            for m in re.finditer(
+                r"(?:убери|удали|без)\s+(?:слов[оа]|фраз[уы]|выражени[ея])?\s*[«\"']?([^»\"',;.\n]+)[»\"']?",
+                text, re.IGNORECASE,
+            ):
+                for word in re.split(r"\s+и\s+|\s*,\s*", m.group(1)):
+                    w = word.strip().strip("«»\"'")
+                    w = re.sub(r"^(?:слов[аоуые]?|фраз[ауые]|выражени[еяй])\s+", "", w, flags=re.IGNORECASE).strip()
+                    if w and len(w) >= 2:
+                        bans.append(w)
+            if bans:
+                extracted_data["forbidden_words"] = list(dict.fromkeys(bans))
 
         current = self.get_profile()
         # The extraction prompt never returns visual, content, sales or brand
