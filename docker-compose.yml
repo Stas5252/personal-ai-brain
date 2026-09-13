@@ -5,6 +5,11 @@ x-brain-common: &brain-common
     context: .
     dockerfile: Dockerfile
   restart: unless-stopped
+  init: true
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
   environment: &brain-environment
     GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
     BRAIN_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
@@ -23,6 +28,7 @@ x-brain-common: &brain-common
     BRAIN_DATA_DIR: /app/data
     BRAIN_DB_PATH: /app/data/brain.db
     VECTOR_DB_DIR: /app/data/vector_db
+    BRAIN_INGESTION_WRITER_LOCK: /app/data/.ingestion-writer.lock
     BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
   volumes:
     - brain-data:/app/data
@@ -32,14 +38,57 @@ x-brain-common: &brain-common
       read_only: true
 
 services:
+  db_migrate:
+    <<: *brain-common
+    restart: "no"
+    container_name: brain-db-migrate
+    command: ["python", "-c", "from src.brain.db import init_db; init_db()"]
+    environment:
+      <<: *brain-environment
+      BRAIN_SERVICE: migrate
+
+  knowledge_bootstrap:
+    <<: *brain-common
+    restart: "no"
+    container_name: brain-knowledge-bootstrap
+    command: ["bash", "-lc", "python /app/scripts/seed_vetted_knowledge.py && if [ \"$${BRAIN_INGEST_CORPUS}\" = \"true\" ]; then python /app/scripts/ingest_course_corpus.py; fi"]
+    environment:
+      <<: *brain-environment
+      BRAIN_SERVICE: bootstrap
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+
+  knowledge_worker:
+    <<: *brain-common
+    container_name: brain-knowledge-worker
+    command: ["python", "/app/scripts/run_knowledge_worker.py"]
+    environment:
+      <<: *brain-environment
+      BRAIN_SERVICE: worker
+      BRAIN_INGEST_CORPUS: "false"
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      knowledge_bootstrap:
+        condition: service_completed_successfully
+    healthcheck:
+      disable: true
+
   brain_api:
     <<: *brain-common
     container_name: brain-api
     environment:
       <<: *brain-environment
       BRAIN_SERVICE: api
+      BRAIN_INGEST_CORPUS: "false"
     ports:
       - "${BRAIN_BIND_ADDRESS:-127.0.0.1}:${BRAIN_API_PORT:-8000}:8000"
+    depends_on:
+      db_migrate:
+        condition: service_completed_successfully
+      knowledge_worker:
+        condition: service_started
     healthcheck:
       test: [CMD, python, -c, "import os,urllib.request; r=urllib.request.Request('http://localhost:8000/health/ready',headers=dict(Authorization='Bearer '+os.environ['BRAIN_API_KEY'])); urllib.request.urlopen(r,timeout=5)"]
       interval: 30s
@@ -47,24 +96,10 @@ services:
       retries: 3
       start_period: 60s
 
-  knowledge_worker:
-    <<: *brain-common
-    container_name: brain-knowledge-worker
-    command: ["python", "-m", "src.brain.knowledge.queue.worker"]
-    environment:
-      <<: *brain-environment
-      BRAIN_SERVICE: worker
-      BRAIN_INGEST_CORPUS: "false"
-    depends_on:
-      brain_api:
-        condition: service_healthy
-    healthcheck:
-      disable: true
-
   telegram:
     <<: *brain-common
     container_name: brain-telegram
-    command: ["python", "-m", "src.brain.channels.telegram_production_runner"]
+    command: ["python", "-m", "src.brain.channels.telegram_production_ingestion"]
     environment:
       <<: *brain-environment
       BRAIN_SERVICE: telegram
@@ -81,6 +116,8 @@ services:
     image: ghcr.io/open-webui/open-webui:0.11.3
     container_name: open-webui
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ports:
       - "${WEBUI_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:
