@@ -1,6 +1,7 @@
 name: personal-ai
 
 x-brain-common: &brain-common
+  image: personal-ai-brain:local
   build:
     context: .
     dockerfile: Dockerfile
