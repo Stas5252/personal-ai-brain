@@ -55,10 +55,10 @@ UPSTREAM_LLM_BASE_URL = os.environ.get(
     "UPSTREAM_LLM_BASE_URL",
     "https://generativelanguage.googleapis.com/v1beta/openai",
 ).rstrip("/")
-DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "gemini-2.5-flash").strip()
+DEFAULT_MODEL = os.environ.get("BRAIN_DEFAULT_MODEL", "gemini-3.5-flash").strip()
 FALLBACK_MODELS = _csv_env(
     "BRAIN_FALLBACK_MODELS",
-    ("gemini-2.5-flash", "gemini-2.5-flash-lite", "gemini-flash-latest"),
+    ("gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3-flash-preview"),
 )
 
 OPENAI_API_BASE_URL = os.environ.get(
