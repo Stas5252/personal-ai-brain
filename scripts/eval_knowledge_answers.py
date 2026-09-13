@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -53,8 +54,11 @@ EVAL_SET: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("01_objections_and_sales", "05_client_communication", "08_sales_phrases", "15_objections_handling_deep", "19_продажи_возражения"),
     ),
     (
+        # 32_photographer_business_os assembles the three-package price list
+        # itself, so it is a correct answer too. Added after a CI report showed
+        # it matching «прайс», «пакет» and «трёх» in one passage.
         "как собрать прайс из трех пакетов",
-        ("03_pricing_and_packages", "20_ценообразование", "28_монетизация"),
+        ("03_pricing_and_packages", "20_ценообразование", "28_монетизация", "32_photographer_business_os"),
     ),
     (
         "как поднять цены и не потерять клиентов",
@@ -77,8 +81,10 @@ EVAL_SET: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ("12_profile_packaging_instagram", "23_сторис_хайлайты", "04_personal_brand", "22_личный_бренд"),
     ),
     (
+        # 16_stories_ideas_and_content holds a month of content in a single
+        # passage — the report showed it matching every word of the question.
         "собери контент план на месяц",
-        ("02_content_strategy", "21_контент_маркетинг", "35_content_and_promotion_playbooks"),
+        ("02_content_strategy", "21_контент_маркетинг", "35_content_and_promotion_playbooks", "16_stories_ideas_and_content"),
     ),
     (
         "как вести базу клиентов и возвращать их на повторные съёмки",
@@ -130,15 +136,25 @@ EVAL_SET: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 # How much of the score comes from the single best passage, and how much from
 # the lesson as a whole. A passage can cover half a question by accident; the
 # lesson that actually answers it covers the whole question somewhere.
-PASSAGE_WEIGHT = 0.7
-DOCUMENT_WEIGHT = 0.3
+PASSAGE_WEIGHT = 0.75
+DOCUMENT_WEIGHT = 0.25
 TITLE_WEIGHT = 0.5
+
+# BM25's term-frequency saturation. A lesson that says «дорого» eight times is
+# about that objection; a lesson that says it once mentioned it in passing.
+# Counting mentions is what separated the two, and the eighth mention still has
+# to count for less than the first.
+TF_SATURATION = 1.5
+
+# The same word shape the tokenizer uses. Counting needs the words in order,
+# which ``tokenize`` cannot give because it returns a set.
+_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 
 class _Lesson(NamedTuple):
     stem: str
     title_tokens: FrozenSet[str]
-    passage_tokens: Tuple[FrozenSet[str], ...]
+    passages: Tuple[Counter, ...]
     all_tokens: FrozenSet[str]
 
 
@@ -172,8 +188,20 @@ def _passages(text: str, max_chars: int = 800) -> List[str]:
     return passages
 
 
+def _counts(text: str) -> Counter:
+    """How often each stem occurs, using the project's own stemmer."""
+    from src.brain.knowledge.text_match import stem
+
+    counted: Counter = Counter()
+    for word in _WORD.findall(text.lower()):
+        stemmed = stem(word)
+        if stemmed:
+            counted[stemmed] += 1
+    return counted
+
+
 def _corpus() -> List[_Lesson]:
-    """Tokenise every lesson once; the eval asks 20 questions of all of them."""
+    """Read every lesson once; the eval asks 20 questions of all of them."""
     global _CORPUS
     if _CORPUS:
         return _CORPUS
@@ -183,17 +211,15 @@ def _corpus() -> List[_Lesson]:
     for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
         title_tokens = frozenset(tokenize(path.stem.replace("_", " ")))
-        passage_tokens = tuple(
-            frozenset(tokenize(passage)) for passage in _passages(text)
-        )
-        all_tokens = (
-            title_tokens.union(*passage_tokens) if passage_tokens else title_tokens
-        )
+        passages = tuple(_counts(passage) for passage in _passages(text))
+        all_tokens = frozenset(title_tokens)
+        for counted in passages:
+            all_tokens |= frozenset(counted)
         lessons.append(
             _Lesson(
                 stem=path.stem,
                 title_tokens=title_tokens,
-                passage_tokens=passage_tokens,
+                passages=passages,
                 all_tokens=all_tokens,
             )
         )
@@ -208,20 +234,27 @@ def _idf() -> Dict[str, float]:
     «ответить» sit in nearly every lesson, so «клиент говорит что дорого»
     landed on the prompt library instead of the objections lesson — 6 of 20
     questions reached the right material. Rarity weighting is what BM25 does
-    inside FTS5, so the offline check now scores the way production ranks.
+    inside FTS5, so the offline check scores the way production ranks.
+
+    The weight starts at one instead of zero on purpose. Across forty lessons
+    that all discuss clients and prices, pure rarity pushed «цена» to nearly
+    zero and let an incidental «поднять» decide the ranking. A word every
+    lesson uses still carries signal; it just carries less.
     """
     lessons = _corpus()
     document_frequency: Counter = Counter()
     for lesson in lessons:
-        seen = set(lesson.title_tokens)
-        for tokens in lesson.passage_tokens:
-            seen |= tokens
-        document_frequency.update(seen)
+        document_frequency.update(lesson.all_tokens)
     total = len(lessons) or 1
     return {
-        token: math.log((total + 1) / (count + 0.5))
+        token: 1.0 + math.log((total + 1) / (count + 0.5))
         for token, count in document_frequency.items()
     }
+
+
+def _tf(count: int) -> float:
+    """Saturating term frequency: the first mention says the most."""
+    return count / (count + TF_SATURATION)
 
 
 def _score(
@@ -232,14 +265,17 @@ def _score(
 ) -> Tuple[float, str]:
     """Score one lesson and explain the score, so a miss can be debugged."""
     best = 0.0
-    best_words: FrozenSet[str] = frozenset()
-    for tokens in lesson.passage_tokens:
-        matched = query & tokens
+    best_words = ""
+    for counted in lesson.passages:
+        matched = [token for token in query if token in counted]
         if not matched:
             continue
-        coverage = sum(weights[token] for token in matched) / total
-        if coverage > best:
-            best, best_words = coverage, frozenset(matched)
+        found = sum(weights[token] * _tf(counted[token]) for token in matched) / total
+        if found > best:
+            best = found
+            best_words = ", ".join(
+                f"{token}×{counted[token]}" for token in sorted(matched)
+            )
 
     in_file = query & lesson.all_tokens
     document = sum(weights[token] for token in in_file) / total
@@ -252,8 +288,7 @@ def _score(
         1.0,
         PASSAGE_WEIGHT * best + DOCUMENT_WEIGHT * document + TITLE_WEIGHT * title,
     )
-    words = ", ".join(sorted(best_words)) or "—"
-    detail = f"проход {best:.2f}, файл {document:.2f}, слова: {words}"
+    detail = f"проход {best:.2f}, файл {document:.2f}, слова: {best_words or '—'}"
     return score, detail
 
 
