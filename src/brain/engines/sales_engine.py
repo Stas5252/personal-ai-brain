@@ -328,7 +328,11 @@ class SalesEngine:
         # Check cannibalization: if package 1 offers too much
         cannibalization_risk = False
         p1 = packages[0] if packages else {}
-        p1_dur_raw = p1.get("duration_hours") or p1.get("duration") or 1
+        p1_text = " ".join(str(val) for val in p1.values())
+        p1_dur_raw = p1.get("duration_hours") or p1.get("duration")
+        if p1_dur_raw is None:
+            m_d = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:час|ч\b|hour)", p1_text, re.IGNORECASE)
+            p1_dur_raw = m_d.group(1) if m_d else 1
         if isinstance(p1_dur_raw, (int, float)):
             p1_dur = float(p1_dur_raw)
         elif isinstance(p1_dur_raw, str):
@@ -337,7 +341,10 @@ class SalesEngine:
         else:
             p1_dur = 1.0
 
-        p1_photos_raw = p1.get("retouched_photos") or p1.get("photos") or 10
+        p1_photos_raw = p1.get("retouched_photos") or p1.get("photos")
+        if p1_photos_raw is None:
+            m_p = re.search(r"(\d+)\s*(?:фото|кадр|снимок|photo)", p1_text, re.IGNORECASE)
+            p1_photos_raw = m_p.group(1) if m_p else 10
         if isinstance(p1_photos_raw, (int, float)):
             p1_photos = int(p1_photos_raw)
         elif isinstance(p1_photos_raw, str):

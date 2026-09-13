@@ -1698,7 +1698,7 @@ def test_blind_benchmark_cat11_task55_fenced_single_writer_protection():
     # Simulate lease expiry and claim by successor worker
     conn = get_connection()
     try:
-        conn.execute("UPDATE ingestion_jobs SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE job_id = ?", (job.job_id,))
+        conn.execute("UPDATE ingestion_jobs SET lease_until = '2000-01-01T00:00:00Z' WHERE job_id = ?", (job.job_id,))
         conn.commit()
     finally:
         conn.close()
