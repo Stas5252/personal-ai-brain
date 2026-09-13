@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: acceptance-${{ github.workflow }}-${{ github.ref }}
@@ -49,12 +50,18 @@ jobs:
           GEMINI_API_KEY: ci-gemini-placeholder
         run: |
           python scripts/ingest_course_corpus.py --dry-run
+      - name: Real questions reach the lesson that answers them
+        run: |
+          set -o pipefail
+          python scripts/eval_knowledge_answers.py --min-pass 0.9 --min-first 0.55 --verbose | tee retrieval-report.txt
       - name: Deterministic reliability and product acceptance
         run: |
+          set -o pipefail
           pytest -q \
             tests/reliability \
             tests/brain/test_corpus_pipeline.py \
             tests/brain/test_knowledge_grounding.py \
+            tests/brain/test_knowledge_sources.py \
             tests/brain/test_pricing_and_matching.py \
             tests/brain/test_yaishka_deep_capabilities.py \
             tests/brain/test_photographer_acceptance.py \
@@ -73,6 +80,27 @@ jobs:
             tests/brain/test_reference_intake.py \
             -k 'not live_vision_critique' \
             --junitxml=acceptance-results.xml | tee acceptance-log.txt
+      - name: Report retrieval quality and failures on the pull request
+        if: always() && github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          {
+            echo "### Доходят ли живые вопросы до нужного урока"
+            echo
+            echo '```'
+            tail -n 90 retrieval-report.txt 2>/dev/null || echo "отчёт не создан"
+            echo '```'
+            echo
+            echo "### Acceptance"
+            echo
+            echo '```'
+            grep -E '^(FAILED|ERROR)' acceptance-log.txt 2>/dev/null | head -n 40 || echo "строк FAILED/ERROR нет"
+            echo '---'
+            tail -n 30 acceptance-log.txt 2>/dev/null || echo "лог не создан"
+            echo '```'
+          } > ci-report.md
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file ci-report.md
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -80,3 +108,4 @@ jobs:
           path: |
             acceptance-results.xml
             acceptance-log.txt
+            retrieval-report.txt

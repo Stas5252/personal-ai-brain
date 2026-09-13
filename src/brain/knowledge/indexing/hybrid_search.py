@@ -2,6 +2,11 @@
 Hybrid Search Engine for Knowledge Ingestion Factory.
 Combines Dense Vector Retrieval (ChromaDB) with Lexical Full-Text Search (SQLite FTS5)
 and generates precise, traceable SourceTrace citations.
+
+Morphology lives in ``src.brain.knowledge.text_match``. This module used to
+carry its own stemmer, so the stems a question was scored with and the FTS5
+prefixes it was searched with could disagree — two implementations, one of them
+always slightly wrong.
 """
 import re
 import json
@@ -14,19 +19,19 @@ from src.brain.models.knowledge import (
 )
 from src.brain.knowledge.indexing.vector_index import ChromaVectorIndex
 from src.brain.knowledge.embeddings.implementations import get_embedding_provider
+from src.brain.knowledge.text_match import layer_bonus, layer_is_strict, search_stem
 
-def _stem_word(word: str) -> str:
-    """Stems Russian and English words to root prefix for robust prefix matching."""
-    w = word.strip().lower()
-    if len(w) <= 3:
-        return w
-    if w.startswith("свад"):
-        return "свад"
-    for suffix in ("ями", "ами", "ого", "ему", "ому", "ыми", "ых", "их", "ей", "ой", "ай", "ий", "ый", "ым", "им", "ем", "ам", "ах", "ях", "ов", "ев", "ть", "ся", "ла", "ли", "ло", "ут", "ют", "ат", "ят", "ет", "ит", "у", "ю", "а", "я", "е", "и", "ы", "о"):
-        if w.endswith(suffix) and len(w) - len(suffix) >= 3:
-            w = w[:-len(suffix)]
-            break
-    return w.rstrip("ьъ")
+# One stemmer for the whole project. Kept under the old module-level name so
+# existing imports keep working.
+_stem_word = search_stem
+
+# Course slides and PDF pages produce long chunks: one matched keyword out of
+# six is normal there, and the fixed vector cutoffs below dropped exactly those
+# chunks — the ones carrying the material. The relief applies only when at
+# least one keyword matched, so the guard against unrelated queries stays.
+LONG_CHUNK_CHARS = 700
+LONG_CHUNK_RELIEF = 0.08
+
 
 BASE_STOP_WORDS = {
     "в", "и", "на", "с", "по", "за", "к", "о", "а", "не", "но", "из", "у", "от", "до", "для",
@@ -68,29 +73,37 @@ class HybridSearchEngine:
         project_id: Optional[str] = None,
         client_id: Optional[str] = None,
         top_k: int = 5,
-        min_score: float = 0.15
+        min_score: float = 0.15,
+        strict_layer: Optional[bool] = None
     ) -> List[Tuple[KnowledgeChunk, float, SourceTrace]]:
         """
         Executes hybrid search across ChromaDB and SQLite FTS5.
         Returns sorted list of (chunk, hybrid_score, source_trace).
+
+        ``layer`` is a preference, not a gate. The course corpus is indexed as
+        PROFESSIONAL while business questions ask for BUSINESS, so the old hard
+        filter answered those questions with an empty result. Pass
+        ``strict_layer=True`` (or set ``BRAIN_LAYER_STRICT``) to restore it.
         """
         clean_query = query.strip()
         if not clean_query:
             return []
 
         layer_val = layer.value if layer else None
+        strict = layer_is_strict() if strict_layer is None else bool(strict_layer)
+        filter_val = layer_val if strict else None
         candidate_limit = max(top_k * 10, 30)
 
         # 1. Vector Search with expanded pool
         vector_hits = self.vector_index.query(
             query_text=clean_query,
             top_k=candidate_limit,
-            layer_filter=layer_val
+            layer_filter=filter_val
         )
         vector_scores: Dict[str, float] = {h[0]: h[1] for h in vector_hits}
 
         # 2. FTS5 Lexical Search with expanded pool
-        fts_scores = self._query_fts5(clean_query, layer_val, limit=candidate_limit)
+        fts_scores = self._query_fts5(clean_query, filter_val, limit=candidate_limit)
 
         # 3. Combine chunk candidate IDs
         candidate_ids = set(vector_scores.keys()).union(set(fts_scores.keys()))
@@ -112,7 +125,10 @@ class HybridSearchEngine:
         for r in rows:
             meta_dict = json.loads(r["metadata_json"] or "{}")
             chunk_layer = KnowledgeLayer(r["layer"])
-            
+
+            if strict and layer_val and chunk_layer.value != layer_val:
+                continue
+
             # Optional project / client filtering
             if project_id and meta_dict.get("project") and meta_dict.get("project") != project_id:
                 continue
@@ -136,18 +152,22 @@ class HybridSearchEngine:
 
             keyword_boost = 0.25 * kw_overlap if kw_overlap >= 0.50 else (0.10 * kw_overlap if kw_overlap >= 0.25 else 0.0)
 
+            # Long chunks dilute keyword overlap, so they get a small discount
+            # on the vector requirement — never on the zero-overlap guard.
+            relief = LONG_CHUNK_RELIEF if len(r["content"] or "") >= LONG_CHUNK_CHARS else 0.0
+
             if exact_boost == 0.0:
                 # If zero keywords match, require very high semantic similarity (>= 0.73)
                 if query_keywords and kw_overlap == 0.0 and v_score < 0.73:
                     continue
                 # If very low overlap (< 25%), require strong vector similarity (>= 0.62)
-                if query_keywords and kw_overlap < 0.25 and v_score < 0.62:
+                if query_keywords and kw_overlap < 0.25 and v_score < 0.62 - relief:
                     continue
                 # If partial overlap (< 45%), reject if vector score is weak (< 0.63)
-                if query_keywords and kw_overlap < 0.45 and v_score < 0.63:
+                if query_keywords and kw_overlap < 0.45 and v_score < 0.63 - relief:
                     continue
                 # Pure fallback threshold
-                if f_score == 0.0 and v_score < 0.52:
+                if f_score == 0.0 and v_score < 0.52 - relief:
                     continue
 
             # Hybrid scoring
@@ -158,7 +178,10 @@ class HybridSearchEngine:
             else:
                 base_score = f_score * 0.85
 
-            hybrid_score = min(1.0, base_score + exact_boost + keyword_boost)
+            hybrid_score = min(
+                1.0,
+                base_score + exact_boost + keyword_boost + layer_bonus(layer_val, chunk_layer.value)
+            )
 
             if hybrid_score < min_score:
                 continue

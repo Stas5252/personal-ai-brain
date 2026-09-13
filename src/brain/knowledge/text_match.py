@@ -1,38 +1,55 @@
 """Russian-aware lexical matching for knowledge retrieval.
 
-Retrieval used to compare raw word forms, so \u00abвозражение\u00bb in a question and
-\u00abвозражения\u00bb in a lesson counted as two unrelated words. On a corpus that is
+Retrieval used to compare raw word forms, so «возражение» in a question and
+«возражения» in a lesson counted as two unrelated words. On a corpus that is
 entirely Russian that is not a rounding error: the correct chunk scored zero
 and the answer came back ungrounded.
+
+This module is the single owner of morphology. ``HybridSearchEngine`` used to
+carry a second, independent stemmer, so the words a question was scored with
+and the FTS5 prefixes it was searched with could disagree — the query matched
+lexically and then lost the keyword guard, or the other way round. Index-side
+code now imports :func:`search_stem` from here instead.
 
 Everything here is pure stdlib and deterministic, so it can be tested without
 the database, the embedding model or the vector store.
 """
 from __future__ import annotations
 
+import os
 import re
 
 __all__ = [
+    "LAYER_BONUS",
     "MIN_STEM_LENGTH",
     "TOPIC_BONUS",
+    "layer_bonus",
+    "layer_is_strict",
     "lexical_score",
     "query_topic",
+    "search_stem",
     "stem",
     "tokenize",
     "topic_bonus",
 ]
 
 # Keep at least this many characters, otherwise short words collapse into each
-# other. Three is the shortest that still lets \u00abцена\u00bb and \u00abцены\u00bb meet at \u00abцен\u00bb.
+# other. Three is the shortest that still lets «цена» and «цены» meet at «цен».
 MIN_STEM_LENGTH = 3
 
-# Two passes, because Russian stacks endings: \u00abвозражением\u00bb needs \u00abем\u00bb removed
-# and then the leftover \u00abи\u00bb, to land on the same stem as \u00abвозражения\u00bb.
+# Two passes, because Russian stacks endings: «возражением» needs «ем» removed
+# and then the leftover «и», to land on the same stem as «возражения».
 _MAX_STRIPS = 2
 
 # Deliberately small. A topic match hints that two texts cover the same area;
 # it is never proof that a chunk answers the question.
 TOPIC_BONUS = 0.12
+
+# A knowledge layer is a preference, not a gate. The course corpus is tagged
+# PROFESSIONAL while business questions arrive asking for BUSINESS, so the old
+# hard filter answered those questions with nothing at all. The bonus keeps the
+# requested layer on top without hiding the rest of the material.
+LAYER_BONUS = 0.06
 
 # Letters only. Years and prices are not retrieval signal and they used to add
 # noise to the token set.
@@ -57,8 +74,8 @@ _STOPWORDS = frozenset(
 # Sorted longest-first at import time so the table below can be edited in any
 # order without silently changing which suffix wins.
 #
-# Derivational endings such as \u00ab-ение\u00bb are intentionally absent: stripping them
-# turns \u00abвозражение\u00bb into \u00abвозраж\u00bb while \u00abвозражения\u00bb only loses \u00abия\u00bb, and the
+# Derivational endings such as «-ение» are intentionally absent: stripping them
+# turns «возражение» into «возраж» while «возражения» only loses «ия», and the
 # two forms stop matching. Inflection only.
 _SUFFIXES = tuple(
     sorted(
@@ -76,6 +93,11 @@ _SUFFIXES = tuple(
     )
 )
 
+# Word families the inflection table cannot join, because the root itself
+# changes: «свадьба» keeps the soft sign, «свадебная» drops it. Wedding work is
+# the single most common paid job in this corpus, so the pair is worth naming.
+_SEARCH_PREFIXES = ("свад",)
+
 
 def stem(word: str) -> str:
     """Reduce a Russian word to a comparable stem."""
@@ -90,6 +112,23 @@ def stem(word: str) -> str:
     return normalised
 
 
+def search_stem(word: str) -> str:
+    """Stem for index-side matching: FTS5 prefixes and the keyword guard.
+
+    Same morphology as :func:`stem`, so a question tokenised for scoring and
+    the prefix query built from it can no longer disagree. The trailing soft or
+    hard sign is dropped because ``"статья"*`` and ``"статьи"*`` have to share
+    one prefix in FTS5.
+    """
+    normalised = (word or "").strip().lower().replace("\u0451", "е")
+    if len(normalised) <= MIN_STEM_LENGTH:
+        return normalised
+    for prefix in _SEARCH_PREFIXES:
+        if normalised.startswith(prefix):
+            return prefix
+    return stem(normalised).rstrip("ьъ")
+
+
 def tokenize(text: str) -> set[str]:
     """Split text into comparable stems, dropping stopwords."""
     tokens: set[str] = set()
@@ -102,7 +141,7 @@ def tokenize(text: str) -> set[str]:
 
 
 def lexical_score(query: str, content: str) -> float:
-    """Score ``content`` against ``query`` on a 0.0 \u2013 1.0 scale."""
+    """Score ``content`` against ``query`` on a 0.0 – 1.0 scale."""
     query_tokens = tokenize(query)
     if not query_tokens:
         return 0.0
@@ -134,3 +173,20 @@ def topic_bonus(topic: str | None, subcategory: str | None) -> float:
     if not topic or not subcategory or topic == TOPIC_GENERAL:
         return 0.0
     return TOPIC_BONUS if str(subcategory).strip().lower() == topic else 0.0
+
+
+def layer_is_strict() -> bool:
+    """True when the owner asked for the old behaviour: layer as a hard filter.
+
+    Default is off. ``BRAIN_LAYER_STRICT=true`` restores filtering for anyone
+    who keeps genuinely separate corpora per layer.
+    """
+    raw = os.environ.get("BRAIN_LAYER_STRICT", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def layer_bonus(requested: str | None, chunk_layer: str | None) -> float:
+    """Reward a chunk that sits in the requested layer, never require it."""
+    if not requested or not chunk_layer:
+        return 0.0
+    return LAYER_BONUS if str(requested) == str(chunk_layer) else 0.0

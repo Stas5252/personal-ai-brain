@@ -88,6 +88,25 @@ class RuntimeState:
                        "(SELECT COALESCE(MAX(id),0)-1000 FROM telegram_inbox)")
 
 
+def attach_sources(result):
+    """Expose which of the owner's materials grounded this answer.
+
+    The titles come from the retrieval that actually ran, so a client of the
+    API can show or log the citation without trusting the model's prose and
+    without paying for a second retrieval.
+    """
+    if not isinstance(result, dict) or result.get('sources'):
+        return result
+    try:
+        from src.brain.services import knowledge_grounding as grounding
+        sources = grounding.last_sources()
+    except Exception:
+        return result
+    if sources:
+        result['sources'] = sources
+    return result
+
+
 def process_request(brain, query, upload_root, images=None, audio_path=None, **kwargs):
     """Media failures stop the request instead of producing an invented answer."""
     import tempfile
@@ -110,4 +129,4 @@ def process_request(brain, query, upload_root, images=None, audio_path=None, **k
     result = brain.process_chat(query=query, **kwargs)
     if result.get('status_code') != 200 or not result.get('response'):
         raise RuntimeError('Модель не ответила. Проверь ключ, квоту и выбранную модель, затем повтори запрос.')
-    return result
+    return attach_sources(result)
