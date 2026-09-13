@@ -10,10 +10,12 @@ on every push.
 Two modes
 ---------
 ``--offline`` (default)
-    Scores the 40 Markdown lessons in ``src/brain/knowledge`` with the same
-    lexical matcher retrieval uses. Pure stdlib: no database, no embeddings, no
-    PDFs, no network. This is what runs in CI, so a morphology or routing
-    regression fails the build instead of quietly degrading answers.
+    Ranks passages of the 40 Markdown lessons in ``src/brain/knowledge`` with
+    the project's own morphology and word-rarity weighting — the signals FTS5
+    applies in production, minus the vector index. Pure stdlib: no database, no
+    embeddings, no PDFs, no network. This is what runs in CI, so a morphology
+    or routing regression fails the build instead of quietly degrading answers.
+    It is a proxy for production ranking; ``--engine`` is the real thing.
 
 ``--engine``
     Runs the real ``KnowledgeEngine.retrieve`` against the indexed corpus on
@@ -25,9 +27,11 @@ Exit code is 0 when the pass rate reaches ``--min-pass``, 1 otherwise.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
+from collections import Counter
 from pathlib import Path
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, FrozenSet, List, NamedTuple, Sequence, Tuple
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -123,26 +127,117 @@ EVAL_SET: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 )
 
 
+class _Lesson(NamedTuple):
+    stem: str
+    title_tokens: FrozenSet[str]
+    passage_tokens: Tuple[FrozenSet[str], ...]
+
+
+_CORPUS: List[_Lesson] = []
+
+
 def _paragraphs(text: str) -> List[str]:
     return [p.strip() for p in text.split("\n\n") if p.strip()]
 
 
-def _offline_ranking(question: str) -> List[Tuple[str, float]]:
-    """Best-scoring paragraph per lesson, lessons ranked by that score."""
-    from src.brain.knowledge.text_match import lexical_score
+def _passages(text: str, max_chars: int = 800) -> List[str]:
+    """Group paragraphs into chunk-sized passages.
 
-    ranked: Dict[str, float] = {}
+    Retrieval hands the model a chunk, not a whole lesson, so ranking whole
+    files would measure something production never does. These lessons are
+    mostly bullet lists — one line per paragraph — and a single line is too
+    short to look relevant on its own.
+    """
+    passages: List[str] = []
+    buffer: List[str] = []
+    size = 0
+    for paragraph in _paragraphs(text):
+        if buffer and size + len(paragraph) > max_chars:
+            passages.append("\n".join(buffer))
+            buffer = [buffer[-1]]  # one paragraph of overlap, as when chunking
+            size = len(buffer[0])
+        buffer.append(paragraph)
+        size += len(paragraph)
+    if buffer:
+        passages.append("\n".join(buffer))
+    return passages
+
+
+def _corpus() -> List[_Lesson]:
+    """Tokenise every lesson once; the eval asks 20 questions of all of them."""
+    global _CORPUS
+    if _CORPUS:
+        return _CORPUS
+    from src.brain.knowledge.text_match import tokenize
+
+    lessons: List[_Lesson] = []
     for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
+        lessons.append(
+            _Lesson(
+                stem=path.stem,
+                title_tokens=frozenset(tokenize(path.stem.replace("_", " "))),
+                passage_tokens=tuple(
+                    frozenset(tokenize(passage)) for passage in _passages(text)
+                ),
+            )
+        )
+    _CORPUS = lessons
+    return _CORPUS
+
+
+def _idf() -> Dict[str, float]:
+    """Weight each word by how rare it is across the lessons.
+
+    Plain word overlap ranked the longest file first: «клиент», «съёмка» and
+    «ответить» sit in nearly every lesson, so «клиент говорит что дорого»
+    landed on the prompt library instead of the objections lesson — 6 of 20
+    questions reached the right material. Rarity weighting is what BM25 does
+    inside FTS5, so the offline check now scores the way production ranks.
+    """
+    lessons = _corpus()
+    document_frequency: Counter = Counter()
+    for lesson in lessons:
+        seen = set(lesson.title_tokens)
+        for tokens in lesson.passage_tokens:
+            seen |= tokens
+        document_frequency.update(seen)
+    total = len(lessons) or 1
+    return {
+        token: math.log((total + 1) / (count + 0.5))
+        for token, count in document_frequency.items()
+    }
+
+
+def _offline_ranking(question: str) -> List[Tuple[str, float]]:
+    """Rank lessons by their best passage, weighted by word rarity."""
+    from src.brain.knowledge.text_match import tokenize
+
+    query = tokenize(question)
+    if not query:
+        return []
+
+    idf = _idf()
+    # A word no lesson uses is maximally rare, not free.
+    unseen = max(idf.values(), default=1.0)
+    weights = {token: idf.get(token, unseen) for token in query}
+    total = sum(weights.values()) or 1.0
+
+    ranked: Dict[str, float] = {}
+    for lesson in _corpus():
         best = 0.0
-        for paragraph in _paragraphs(text):
-            best = max(best, lexical_score(question, paragraph))
-        # The title is part of the material: a lesson called «Ценообразование»
-        # answers a pricing question even when no paragraph repeats the word.
-        best = max(best, lexical_score(question, path.stem.replace("_", " ")))
+        for tokens in lesson.passage_tokens:
+            matched = query & tokens
+            if matched:
+                best = max(best, sum(weights[token] for token in matched) / total)
+        in_title = query & lesson.title_tokens
+        if in_title:
+            # The title is material too: «Ценообразование» answers a pricing
+            # question even when no passage repeats the word.
+            best = min(1.0, best + 0.5 * sum(weights[t] for t in in_title) / total)
         if best > 0.0:
-            ranked[path.stem] = best
-    return sorted(ranked.items(), key=lambda item: item[1], reverse=True)
+            ranked[lesson.stem] = best
+    return sorted(ranked.items(), key=lambda item: (-item[1], item[0]))
 
 
 def _engine_ranking(question: str, limit: int) -> List[Tuple[str, float]]:
