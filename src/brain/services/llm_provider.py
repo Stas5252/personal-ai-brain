@@ -43,6 +43,10 @@ class LLMProvider:
         if os.environ.get("ENV") == "test" and not self.api_key:
             return 200, "Тестовый ответ ассистента фотографа.", 0.05, models_to_try[0]
 
+        # Decided before grounding: a JSON contract is the caller's, and the
+        # evidence block must not be mistaken for one.
+        wants_prose = not grounding.expects_json(messages)
+
         # Every engine and every guided action reaches the model through this
         # method, so grounding the prompt here is what makes the course corpus
         # reachable from all of them — not only from BrainService.process_chat.
@@ -82,7 +86,7 @@ class LLMProvider:
                         raw = resp.read().decode("utf-8")
                         parsed = json.loads(raw)
                         content = parsed["choices"][0]["message"]["content"]
-                        return 200, content, total_dt, m
+                        return 200, self._cite(content, wants_prose), total_dt, m
                 except urllib.error.HTTPError as e:
                     dt = time.time() - t0
                     total_dt += dt
@@ -105,3 +109,19 @@ class LLMProvider:
                     break
 
         return 500, f"All models exhausted. Last error: {last_err}", total_dt, models_to_try[0]
+
+    def _cite(self, content: str, wants_prose: bool) -> str:
+        """Attach the sources that were actually retrieved for this answer.
+
+        Asking the model to cite produced three failure modes: a forgotten
+        line, a line listing material it never used, and an invented lesson
+        title. The line is therefore rendered from retrieval, and a line the
+        model wrote itself is dropped. JSON contracts are left untouched.
+        """
+        if not wants_prose or not grounding.sources_in_answer():
+            return content
+        try:
+            return grounding.append_sources(content, self.last_grounding_sources)
+        except Exception:
+            log.warning("Could not render the source line; returning the answer as is.", exc_info=True)
+            return content
