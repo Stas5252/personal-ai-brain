@@ -1,176 +1,190 @@
-"""Single-owner API with bounded uploads, rate limiting and queued ingestion."""
-import base64
-import hashlib
+"""HTTP API for personal brain."""
+import hmac
 import logging
+import os
+import time
 import uuid
+from collections import defaultdict, deque
 from pathlib import Path
+from threading import Lock
+from typing import Optional
+from urllib.parse import urlparse
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
-from starlette.concurrency import run_in_threadpool
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Header, HTTPException, Request, UploadFile
+from fastapi.responses import JSONResponse, PlainTextResponse
+from pydantic import BaseModel, Field
 
-from src.brain.api.ratelimit import RateLimiter, client_key
-from src.brain.api.security import verify_brain_api_key
-from src.brain.channels.runtime_state import confined_file, process_request
-from src.brain.config import (
-    ALLOWED_EXTENSIONS, DATA_DIR, MAX_FILE_SIZE_BYTES,
-    RATE_LIMIT_ENABLED, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS,
-)
+from src.brain.config import BRAIN_API_KEY, GEMINI_API_KEY, MAX_FILE_SIZE_BYTES, STORAGE_DIR
+from src.brain.health import metrics_text, readiness_report
+from src.brain.knowledge.knowledge_tool import get_knowledge_tool
+from src.brain.migration import import_legacy_notes
+from src.brain.models.model_router import ModelRouter
+from src.brain.orchestrator import BrainOrchestrator
 
-log = logging.getLogger(__name__)
-app = FastAPI(title="Personal AI Brain", version="2.2.0", docs_url=None, redoc_url=None, openapi_url=None)
-UPLOAD_ROOT = DATA_DIR / "uploads"
-UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-RATE_LIMIT_EXEMPT_PATHS = {"/health", "/health/ready", "/health/live", "/metrics"}
-_limiter = RateLimiter(capacity=RATE_LIMIT_REQUESTS, window_seconds=RATE_LIMIT_WINDOW_SECONDS)
+logger = logging.getLogger(__name__)
+app = FastAPI(title="Personal AI Brain API", version="1.0.0")
+orchestrator = BrainOrchestrator()
 
-
-@app.middleware("http")
-async def limit_rate(request: Request, call_next):
-    if RATE_LIMIT_ENABLED and request.url.path not in RATE_LIMIT_EXEMPT_PATHS:
-        key = client_key(request.headers.get("authorization"), request.headers.get("x-brain-api-key"), request.client.host if request.client else None)
-        allowed, retry_after = _limiter.check(key)
-        if not allowed:
-            return JSONResponse({"detail": "Too many requests. Slow down and retry shortly."}, status_code=429, headers={"Retry-After": str(retry_after)})
-    return await call_next(request)
+RATE_LIMIT_ENABLED = os.environ.get("BRAIN_RATE_LIMIT_ENABLED", "true").lower() in {"1", "true", "yes"}
+RATE_LIMIT_REQUESTS = int(os.environ.get("BRAIN_RATE_LIMIT_REQUESTS", "120"))
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("BRAIN_RATE_LIMIT_WINDOW_SECONDS", "60"))
+_RATE_LIMIT_BUCKETS: dict[str, deque[float]] = defaultdict(deque)
+_RATE_LIMIT_LOCK = Lock()
+_PUBLIC_PATHS = {"/health", "/health/live"}
+_RATE_LIMIT_EXEMPT_PATHS = _PUBLIC_PATHS | {"/health/ready", "/metrics"}
 
 
 @app.middleware("http")
-async def protect_api(request: Request, call_next):
-    if request.url.path not in {"/", "/studio", "/health", "/health/live"}:
-        try:
-            verify_brain_api_key(request.headers.get("authorization"), request.headers.get("x-brain-api-key"))
-        except HTTPException as exc:
-            return JSONResponse({"detail": exc.detail}, status_code=exc.status_code, headers=exc.headers)
+async def auth_and_rate_limit(request: Request, call_next):
+    path = request.url.path
+    request_id = (request.headers.get("x-request-id") or str(uuid.uuid4()))[:128]
+    if path not in _PUBLIC_PATHS:
+        authorization = request.headers.get("authorization", "")
+        expected = f"Bearer {BRAIN_API_KEY}"
+        if not BRAIN_API_KEY or not hmac.compare_digest(authorization, expected):
+            return JSONResponse(status_code=401, content={"detail": "Invalid API key"}, headers={"X-Request-ID": request_id})
+    if RATE_LIMIT_ENABLED and path not in _RATE_LIMIT_EXEMPT_PATHS:
+        client_ip = request.client.host if request.client else "unknown"
+        now = time.monotonic()
+        key = f"{client_ip}:{path}"
+        with _RATE_LIMIT_LOCK:
+            bucket = _RATE_LIMIT_BUCKETS[key]
+            while bucket and bucket[0] <= now - RATE_LIMIT_WINDOW_SECONDS:
+                bucket.popleft()
+            if len(bucket) >= RATE_LIMIT_REQUESTS:
+                return JSONResponse(status_code=429, content={"detail": "Rate limit exceeded"}, headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS), "X-Request-ID": request_id})
+            bucket.append(now)
     response = await call_next(request)
-    response.headers.update({"X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Frame-Options": "DENY"})
+    response.headers["X-Request-ID"] = request_id
     return response
 
 
+class ChatRequest(BaseModel):
+    user_id: str = Field(..., min_length=1, max_length=128)
+    message: str = Field(..., min_length=1, max_length=100_000)
+    max_tokens: int = Field(default=2048, ge=64, le=8192)
+    temperature: float = Field(default=0.7, ge=0.0, le=2.0)
+
+
+class SearchRequest(BaseModel):
+    query: str = Field(..., min_length=1, max_length=10_000)
+    limit: int = Field(default=8, ge=1, le=50)
+
+
+class FeedbackRequest(BaseModel):
+    chat_id: Optional[int] = None
+    query_text: str = Field(..., min_length=1, max_length=10_000)
+    response_text: str = Field(..., min_length=1, max_length=100_000)
+    result_id: Optional[str] = Field(default=None, max_length=256)
+    source_id: Optional[str] = Field(default=None, max_length=256)
+    chunk_id: Optional[str] = Field(default=None, max_length=256)
+    score: int = Field(..., ge=-1, le=1)
+    note: str = Field(default="", max_length=5000)
+
+
 @app.get("/health")
-@app.get("/health/live")
 def health():
-    return {"status": "alive", "service": "Personal AI Brain"}
+    """Backwards-compatible public liveness alias."""
+    return {"status": "alive"}
+
+
+@app.get("/health/live")
+def live():
+    """Public process liveness only; no dependency checks."""
+    return {"status": "alive"}
 
 
 @app.get("/health/ready")
 def ready():
-    from src.brain.health import readiness_report
-
-    payload, is_ready = readiness_report()
-    return JSONResponse(payload, status_code=200 if is_ready else 503)
+    """Authenticated, fail-closed readiness composed entirely of offline checks."""
+    payload, is_ready = readiness_report(model_key=GEMINI_API_KEY)
+    return JSONResponse(status_code=200 if is_ready else 503, content=payload)
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
 def metrics():
-    from src.brain.health import metrics_text
-
-    return metrics_text()
+    """Authenticated low-cardinality Prometheus metrics with no provider traffic."""
+    return PlainTextResponse(content=metrics_text(), media_type="text/plain; version=0.0.4")
 
 
 @app.get("/health/knowledge")
-def knowledge_status():
-    from src.brain.config import CORPUS_DIR
-    from src.brain.knowledge.corpus import CorpusLedger, iter_corpus_files
+def knowledge_health():
     try:
-        ledger = CorpusLedger(DATA_DIR / ".corpus_ledger.json")
-        on_disk = len(list(iter_corpus_files(CORPUS_DIR)))
-        counts = ledger.counts()
-        settled = counts.get("indexed", 0) + counts.get("duplicate", 0)
-        return {"corpus_files_on_disk": on_disk, "corpus_files_settled": settled, "statuses": counts, "topics": ledger.topic_counts(), "chunks": ledger.total_chunks(), "failures": [{"name": e.name, "error": e.error} for e in ledger.failures()], "complete": bool(on_disk) and settled >= on_disk}
-    except Exception:
-        log.exception("Knowledge status unavailable")
-        raise HTTPException(503, "Knowledge status unavailable.")
+        tool = get_knowledge_tool()
+        details = tool.health_check()
+        status = "ok" if details.get("status") in {"healthy", "ok"} else "degraded"
+        return {"status": status, "details": details}
+    except Exception as exc:
+        logger.exception("Knowledge health check failed")
+        return JSONResponse(status_code=503, content={"status": "degraded", "error": str(exc)})
 
 
-@app.get("/", response_class=HTMLResponse)
-@app.get("/studio", response_class=HTMLResponse)
-def studio_ui():
-    content = (Path(__file__).parent.parent / "web" / "index.html").read_text(encoding="utf-8")
-    script = content.split("<script>", 1)[1].split("</script>", 1)[0]
-    digest = base64.b64encode(hashlib.sha256(script.encode()).digest()).decode()
-    return HTMLResponse(content, headers={"Content-Security-Policy": f"default-src 'none'; script-src 'sha256-{digest}'; style-src 'unsafe-inline'; connect-src 'self'; img-src 'self' blob:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"})
+@app.get("/v1/models")
+def models():
+    model_ids = ModelRouter.supported_models()
+    return {"object": "list", "data": [{"id": model_id, "object": "model", "owned_by": "personal-brain"} for model_id in model_ids]}
 
 
-async def save_upload(file: UploadFile):
-    suffix = Path(file.filename or "").suffix.lower()
-    if suffix not in ALLOWED_EXTENSIONS:
-        await file.close()
-        raise HTTPException(415, "Unsupported file extension.")
-    path = UPLOAD_ROOT / f"{uuid.uuid4().hex}{suffix}"
-    size = 0
-    try:
-        with path.open("xb") as target:
-            while chunk := await file.read(1024 * 1024):
-                size += len(chunk)
-                if size > MAX_FILE_SIZE_BYTES:
-                    raise HTTPException(413, "File exceeds configured size limit.")
-                target.write(chunk)
-        if not size:
-            raise HTTPException(400, "Empty file.")
-        from src.brain.knowledge.storage import StorageManager
-        validation = await run_in_threadpool(StorageManager().validate_file, path, file.filename)
-        if not validation.is_valid:
-            raise HTTPException(415, "File content does not match a supported format.")
-        return path
-    except BaseException:
-        path.unlink(missing_ok=True)
-        raise
-    finally:
-        await file.close()
-
-
-@app.post("/api/upload")
-async def upload_asset(file: UploadFile = File(...)):
-    path = await save_upload(file)
-    return {"status": "success", "filename": file.filename, "file_path": str(path), "url": f"/api/uploads/{path.name}"}
-
-
-@app.get("/api/uploads/{filename}")
-def uploaded_asset(filename: str):
-    try:
-        path = confined_file(UPLOAD_ROOT / filename, UPLOAD_ROOT)
-    except ValueError:
-        raise HTTPException(404, "File not found.")
-    return FileResponse(path, filename=path.name, content_disposition_type="attachment")
-
-
-@app.post("/api/upload_knowledge")
-async def upload_knowledge(file: UploadFile = File(...)):
-    path = await save_upload(file)
-    try:
-        from src.brain.knowledge.registration import IngestionRegistrar
-        result = await run_in_threadpool(IngestionRegistrar().register_file, path, original_filename=file.filename, title=file.filename)
-        location = f"/knowledge/jobs/{result.job.job_id}"
-        return JSONResponse({"job_id": result.job.job_id, "source_id": result.source_id, "status": result.job.status.value, "stage": result.job.stage, "progress": result.job.progress, "duplicate": result.duplicate, "status_url": location}, status_code=status.HTTP_202_ACCEPTED, headers={"Location": location})
-    except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    except Exception:
-        log.exception("Knowledge registration failed")
-        raise HTTPException(503, "Could not queue this file for indexing.")
-    finally:
-        path.unlink(missing_ok=True)
-
-
-from src.brain.api.routes.brain_routes import ChatRequest, brain, router as brain_router
-
-
-@app.post("/brain/chat")
+@app.post("/chat")
 def chat(req: ChatRequest):
-    if len(req.query) > 32000 or sum(len(str(m.get("content", ""))) for m in (req.conversation_history or [])) > 64000:
-        raise HTTPException(413, "Conversation is too large.")
+    response = orchestrator.process_chat(user_id=req.user_id, message=req.message, max_tokens=req.max_tokens, temperature=req.temperature)
+    return {"response": response}
+
+
+@app.post("/v1/chat/completions")
+def chat_completions(payload: dict):
+    messages = payload.get("messages") or []
+    user_id = str(payload.get("user") or "open-webui")
+    prompt = "\n".join(str(item.get("content", "")) for item in messages if item.get("role") == "user")
+    if not prompt:
+        raise HTTPException(status_code=400, detail="No user message")
+    result = orchestrator.process_chat(user_id=user_id, message=prompt)
+    return {"id": f"chatcmpl-{int(time.time())}", "object": "chat.completion", "created": int(time.time()), "model": payload.get("model") or "personal-ai-brain", "choices": [{"index": 0, "message": {"role": "assistant", "content": result}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}}
+
+
+@app.post("/knowledge/search")
+def search(req: SearchRequest):
+    tool = get_knowledge_tool()
+    return {"results": tool.search(req.query, limit=req.limit)}
+
+
+@app.post("/knowledge/feedback")
+def feedback(req: FeedbackRequest):
+    tool = get_knowledge_tool()
     try:
-        return process_request(brain, req.query, UPLOAD_ROOT, images=req.images, audio_path=req.audio_path, project_id=req.project_id, client_id=req.client_id, preferred_model=req.model, auto_admission=req.auto_admission, conversation_history=req.conversation_history)
+        feedback_id = tool.add_feedback(**req.model_dump())
     except ValueError as exc:
-        raise HTTPException(422, str(exc))
-    except RuntimeError as exc:
-        raise HTTPException(502, str(exc))
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"feedback_id": feedback_id, "status": "saved"}
 
 
-app.include_router(brain_router)
-from src.brain.api.routes.openai_routes import router as openai_router
-from src.brain.api.routes.knowledge_routes import router as knowledge_router
-from src.brain.api.routes.image_routes import router as image_router
-app.include_router(openai_router)
-app.include_router(knowledge_router)
-app.include_router(image_router)
+def _safe_upload_path(filename: str) -> Path:
+    candidate = Path(filename).name
+    if not candidate or candidate in {".", ".."}:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+    destination = Path(STORAGE_DIR) / "uploads" / candidate
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    return destination
+
+
+@app.post("/knowledge/upload")
+async def upload(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+    destination = _safe_upload_path(file.filename or "upload.bin")
+    received = 0
+    with destination.open("wb") as handle:
+        while chunk := await file.read(1024 * 1024):
+            received += len(chunk)
+            if received > MAX_FILE_SIZE_BYTES:
+                handle.close()
+                destination.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="File too large")
+            handle.write(chunk)
+    tool = get_knowledge_tool()
+    background_tasks.add_task(tool.ingest, destination)
+    return {"status": "queued", "filename": destination.name, "bytes": received}
+
+
+@app.post("/admin/import-legacy-notes")
+def migrate_notes():
+    count = import_legacy_notes()
+    return {"imported": count}
