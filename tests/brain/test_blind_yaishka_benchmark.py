@@ -145,9 +145,11 @@ COLLECTOR = BlindBenchmarkCollector()
 
 @pytest.fixture(scope="module")
 def benchmark_brain():
+    b = BrainService()
+    initial_profile = b.profile_engine.get_profile()
+
     from src.brain.db import get_connection
     conn = get_connection()
-    initial_profile_row = conn.execute("SELECT profile_json FROM profile WHERE id = 1").fetchone()
     initial_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
     initial_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
     initial_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
@@ -155,7 +157,6 @@ def benchmark_brain():
     initial_client_ids = {row["id"] for row in conn.execute("SELECT id FROM clients").fetchall()}
     conn.close()
 
-    b = BrainService()
     p = UserProfile(
         identity="Виктория Ларионова",
         profession="Портретный и семейный фотограф",
@@ -171,6 +172,8 @@ def benchmark_brain():
     b.profile_engine.save_profile(p)
 
     yield b
+
+    b.profile_engine.save_profile(initial_profile)
 
     conn = get_connection()
     try:
@@ -190,11 +193,6 @@ def benchmark_brain():
             conn.execute("DELETE FROM tasks WHERE task_id = ?", (tid,))
         for cid in (all_client_ids - initial_client_ids):
             conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
-
-        if initial_profile_row:
-            conn.execute("UPDATE profile SET profile_json = ? WHERE id = 1", (initial_profile_row["profile_json"],))
-        else:
-            conn.execute("DELETE FROM profile WHERE id = 1")
         conn.commit()
     except Exception:
         pass
