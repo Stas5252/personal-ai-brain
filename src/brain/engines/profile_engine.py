@@ -336,9 +336,9 @@ class ProfileEngine:
             from src.brain.models.memory import MemoryType
             me = MemoryEngine()
             if saved.identity:
-                me.add_memory(content=f"Фотографа зовут: {saved.identity}", memory_type=MemoryType.CORE_FACT, importance=1.0)
+                me.add_memory(content=f"Фотографа зовут: {saved.identity}", memory_type=MemoryType.PROFILE, importance=1.0)
             if saved.niche:
-                me.add_memory(content=f"Специализация и ниша: {saved.niche} в городе {saved.city or 'не указан'}", memory_type=MemoryType.CORE_FACT, importance=0.95)
+                me.add_memory(content=f"Специализация и ниша: {saved.niche} в городе {saved.city or 'не указан'}", memory_type=MemoryType.PROFILE, importance=0.95)
             if saved.goals:
                 me.add_memory(content=f"Цели фотографа: {', '.join(saved.goals)}", memory_type=MemoryType.GOAL, importance=0.9)
         except Exception:
