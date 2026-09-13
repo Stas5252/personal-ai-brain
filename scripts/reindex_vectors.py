@@ -8,7 +8,7 @@ previous vector directory as a rollback target.
 from __future__ import annotations
 
 import argparse
-import fcntl
+from src.brain.services.file_lock import acquire_exclusive_lock
 import gc
 import json
 import os
@@ -45,7 +45,7 @@ def _writer_lock(data_dir: Path):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire_exclusive_lock(handle)
         except BlockingIOError as exc:
             raise RuntimeError("Another ingestion writer owns the lock; stop it before reindex") from exc
         yield

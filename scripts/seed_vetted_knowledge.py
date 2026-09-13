@@ -9,6 +9,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 KNOWLEDGE_DIR = ROOT / "src" / "brain" / "knowledge"
 CORE_FILES = (
     "00_verified_core.md", "32_photographer_business_os.md",

@@ -1,7 +1,7 @@
 """Knowledge API: producers register durable jobs; only the worker ingests."""
 from __future__ import annotations
 
-import fcntl
+from src.brain.services.file_lock import acquire_exclusive_lock
 import json
 import os
 import shutil
@@ -166,7 +166,7 @@ def delete_source(source_id: str):
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire_exclusive_lock(handle)
         except BlockingIOError:
             raise HTTPException(409, "Knowledge writer is active; retry deletion later.")
         connection = get_connection()

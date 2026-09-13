@@ -2,7 +2,7 @@
 """Run the sole production ingestion writer with lock and process heartbeat."""
 from __future__ import annotations
 
-import fcntl
+from src.brain.services.file_lock import acquire_exclusive_lock
 import json
 import os
 import sys
@@ -66,7 +66,7 @@ def main() -> int:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+") as handle:
         try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            acquire_exclusive_lock(handle)
         except BlockingIOError:
             print(f"Another ingestion writer owns {lock_path}; refusing startup.", file=sys.stderr)
             return 73
