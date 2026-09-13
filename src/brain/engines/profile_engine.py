@@ -262,7 +262,13 @@ class ProfileEngine:
                 clean = resp_text.strip()
                 if clean.startswith("```"):
                     clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                extracted_data = json.loads(clean)
+                # Use regex to find outermost JSON object if LLM provided extra commentary
+                import re
+                json_match = re.search(r"\{.*\}", clean, re.DOTALL)
+                if json_match:
+                    extracted_data = json.loads(json_match.group(0))
+                else:
+                    extracted_data = json.loads(clean)
         except Exception as e:
             print(f"[!] Error extracting profile via LLM: {e}")
 
