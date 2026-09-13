@@ -65,7 +65,7 @@ def test_answer_gets_exactly_one_source_line():
 
 
 def test_model_written_source_line_is_replaced_not_duplicated():
-    raw = "Текст ответа.\\n\\n\\U0001F4DA Источники: Урок, который я придумал"
+    raw = "Текст ответа.\n\n\U0001F4DA Источники: Урок, который я придумал"
     answer = grounding.append_sources(raw, ["Урок 3. Возражения, с. 12"])
     assert answer.count(grounding.SOURCES_PREFIX) == 1
     assert "придумал" not in answer
@@ -73,7 +73,7 @@ def test_model_written_source_line_is_replaced_not_duplicated():
 
 
 def test_invented_citation_is_removed_when_nothing_was_retrieved():
-    raw = "Общий совет.\\n\\n**\\U0001F4DA Источники:** Урок 12. Которого нет"
+    raw = "Общий совет.\n\n**\U0001F4DA Источники:** Урок 12. Которого нет"
     assert grounding.append_sources(raw, []) == "Общий совет."
 
 

@@ -53,7 +53,7 @@ LAYER_BONUS = 0.06
 
 # Letters only. Years and prices are not retrieval signal and they used to add
 # noise to the token set.
-_WORD = re.compile(r"[^\\W\\d_]+", re.UNICODE)
+_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
 
 # Function words carry no signal but inflate the denominator, which pushed
 # genuinely relevant chunks below the score threshold.
@@ -126,7 +126,7 @@ _BRAND_ALIASES = {
 
 def _normalise(word: str) -> str:
     """Lowercase, unify the two spellings of e, and fold brand names."""
-    lowered = (word or "").strip().lower().replace("\\u0451", "е")
+    lowered = (word or "").strip().lower().replace("\u0451", "е")
     return _BRAND_ALIASES.get(lowered, lowered)
 
 
