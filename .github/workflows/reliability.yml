@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  pull-requests: write
 
 concurrency:
   group: acceptance-${{ github.workflow }}-${{ github.ref }}
@@ -71,6 +72,10 @@ jobs:
           set -Eeuo pipefail
           exec > >(tee -a ci-diagnostics.log) 2>&1
           python scripts/ingest_course_corpus.py --dry-run
+      - name: Real questions reach the lesson that answers them
+        run: |
+          set -o pipefail
+          python scripts/eval_knowledge_answers.py --min-pass 0.9 --min-first 0.55 --verbose | tee retrieval-report.txt
       - name: Complete deterministic offline suite
         run: |
           set -Eeuo pipefail
@@ -116,6 +121,7 @@ jobs:
             acceptance-results.xml
             acceptance-log.txt
             ci-diagnostics.log
+            retrieval-report.txt
       - name: Compose cleanup
         if: always()
         run: docker compose down --volumes --remove-orphans || true

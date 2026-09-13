@@ -146,8 +146,15 @@ class KnowledgeEngine:
         Falls back to lexical matching if the vector store is uninitialized or
         returns nothing, so a broken index degrades the answer instead of
         emptying it.
+
+        ``layer`` is a preference, not a filter: the course material is indexed
+        as PROFESSIONAL while business questions ask for BUSINESS, so filtering
+        on it used to answer those questions with nothing at all. Set
+        ``BRAIN_LAYER_STRICT=true`` to get the old hard filter back.
         """
-        from src.brain.knowledge.text_match import lexical_score, query_topic, topic_bonus
+        from src.brain.knowledge.text_match import (
+            layer_bonus, layer_is_strict, lexical_score, query_topic, topic_bonus,
+        )
 
         try:
             from src.brain.knowledge.indexing.hybrid_search import HybridSearchEngine
@@ -169,11 +176,12 @@ class KnowledgeEngine:
             )
 
         # Robust lexical fallback
+        strict_layer = layer_is_strict()
         conn = get_connection()
         c = conn.cursor()
         sql = "SELECT * FROM knowledge_chunks WHERE 1=1"
         params = []
-        if layer:
+        if layer and strict_layer:
             sql += " AND layer = ?"
             params.append(layer.value)
             
@@ -187,6 +195,7 @@ class KnowledgeEngine:
         # The question is routed into the same nine topics the course corpus is
         # indexed under, so a pricing question prefers pricing lessons.
         topic = query_topic(query)
+        requested_layer = layer.value if layer else None
         scored_chunks = []
         
         for r in rows:
@@ -204,9 +213,14 @@ class KnowledgeEngine:
 
             score = lexical_score(query, r["content"])
             if score > 0.0:
-                # Topic agreement only strengthens a chunk that already matched;
-                # it can never pull in an unrelated one.
-                score = min(1.0, score + topic_bonus(topic, meta.subcategory))
+                # Topic and layer agreement only strengthen a chunk that
+                # already matched; neither can pull in an unrelated one.
+                score = min(
+                    1.0,
+                    score
+                    + topic_bonus(topic, meta.subcategory)
+                    + layer_bonus(requested_layer, r["layer"]),
+                )
 
             if score > MIN_LEXICAL_SCORE:
                 chunk = KnowledgeChunk(
