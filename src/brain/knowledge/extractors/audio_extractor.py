@@ -73,8 +73,89 @@ class AudioExtractor(BaseExtractor):
                             'source': 'sidecar' if self.allow_sidecar and sidecar.is_file() else 'whisper'},
             )
         except Exception as exc:
+            if self._has_gemini_key():
+                try:
+                    return self._transcribe_with_gemini(path, source_id)
+                except Exception:
+                    pass
             return ExtractionResult(source_id=source_id, success=False,
                                     error_message=f'Transcription failed ({type(exc).__name__}).')
+
+    def _has_gemini_key(self) -> bool:
+        from src.brain.config import GEMINI_API_KEY
+        return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
+
+    def _transcribe_with_gemini(self, audio_path: Path, source_id: str) -> ExtractionResult:
+        import base64
+        import urllib.request
+        import urllib.error
+        import logging
+        from src.brain.config import GEMINI_API_KEY, DEFAULT_MODEL, FALLBACK_MODELS
+
+        logger = logging.getLogger(__name__)
+        mime_map = {
+            '.mp3': 'audio/mp3',
+            '.wav': 'audio/wav',
+            '.ogg': 'audio/ogg',
+            '.oga': 'audio/ogg',
+            '.m4a': 'audio/m4a',
+            '.flac': 'audio/flac',
+        }
+        mime = mime_map.get(audio_path.suffix.lower(), 'audio/ogg')
+        data_b64 = base64.b64encode(audio_path.read_bytes()).decode('ascii')
+
+        candidates = [DEFAULT_MODEL]
+        for m in FALLBACK_MODELS:
+            if m not in candidates:
+                candidates.append(m)
+        # Ensure modern fast models are first in line
+        if "gemini-3.5-flash" in candidates:
+            candidates.remove("gemini-3.5-flash")
+            candidates.insert(0, "gemini-3.5-flash")
+
+        last_error = None
+        for model in candidates:
+            url = f'https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={GEMINI_API_KEY}'
+            payload = {
+                'contents': [{
+                    'parts': [
+                        {'text': 'Транскрибируй эту голосовую аудиозапись дословно на русском языке. Верни только распознанный текст без каких-либо комментариев.'},
+                        {'inlineData': {'mimeType': mime, 'data': data_b64}}
+                    ]
+                }]
+            }
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(payload).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST',
+            )
+            try:
+                with urllib.request.urlopen(req, timeout=60) as resp:
+                    body = json.loads(resp.read().decode('utf-8'))
+                    text = body['candidates'][0]['content']['parts'][0]['text'].strip()
+                if text:
+                    element = ExtractedElement(
+                        element_type='transcript_segment', content=text,
+                        start_time=0.0, end_time=0.0,
+                        metadata={'language': 'ru', 'confidence': 0.95},
+                    )
+                    return ExtractionResult(
+                        source_id=source_id, success=True, elements=[element],
+                        raw_text=text, duration_seconds=0.0,
+                        media_info={'language': 'ru', 'segments_count': 1, 'source': f'gemini_multimodal_{model}'},
+                    )
+            except urllib.error.HTTPError as e:
+                err_text = e.read().decode('utf-8', errors='ignore')
+                logger.warning("Gemini transcription failed on %s: HTTP %s (%s)", model, e.code, err_text[:120])
+                last_error = f"HTTP {e.code} on {model}"
+                continue
+            except Exception as e:
+                logger.warning("Gemini transcription exception on %s: %s", model, e)
+                last_error = str(e)
+                continue
+
+        raise ValueError(f"All Gemini models exhausted for audio transcription. Last error: {last_error}")
 
     def _load_sidecar_transcript(self, path: Path) -> Tuple[List[AudioSegment], str]:
         data = json.loads(path.read_text(encoding='utf-8'))

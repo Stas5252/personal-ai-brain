@@ -77,14 +77,25 @@ class GuidedActionService:
 
     @staticmethod
     def _format(value):
-        if isinstance(value, dict): return "\n\n".join(f"**{str(k).replace('_',' ').capitalize()}**\n{GuidedActionService._format(v)}" for k,v in value.items())
+        if isinstance(value, dict):
+            if list(value.keys()) == ["result"]:
+                return str(value["result"])
+            return "\n\n".join(f"**{str(k).replace('_',' ').capitalize()}**\n{GuidedActionService._format(v)}" for k,v in value.items())
         if isinstance(value, list): return "\n".join(f"• {GuidedActionService._format(x)}" for x in value)
         return str(value)
 
     @staticmethod
     def _chat(brain, task, text=""):
         result = brain.process_chat(query=f"{task}\n\nВходные данные:\n{text}".strip(), auto_admission=False)
-        if result.get("status_code") != 200: raise RuntimeError("LLM request failed")
+        if result.get("status_code") != 200:
+            reason = result.get("error") or result.get("response") or ""
+            raise RuntimeError(
+                f"⚠️ Нейросеть сейчас недоступна.\n\n"
+                f"Проверьте, что `GEMINI_API_KEY` указан в `.env` и лимит запросов не исчерпан.\n"
+                f"Детали: {reason}" if reason else
+                "⚠️ Нейросеть сейчас недоступна.\n\n"
+                "Проверьте, что `GEMINI_API_KEY` указан в `.env` и лимит запросов не исчерпан."
+            )
         return {"result": result.get("response", "")}
 
     @staticmethod
@@ -243,6 +254,34 @@ class GuidedActionService:
         elif action_id=="sales.proposal": data=self.promo.build_campaign_offer(text,profile,use_llm)
         elif action_id=="shoot.moodboard":
             location=self._vision(brain,image_path,"Опиши свет, цвета, фактуры и ограничения локации.") if image_path else ""; data=brain.shooting_engine.generate_moodboard_card(text or "Концепция по локации",location=location,use_llm=use_llm)
+            try:
+                from src.brain.engines.visual_card_renderer import render_moodboard_card
+                from src.brain.config import DERIVED_DIR
+                import uuid
+                card_file = DERIVED_DIR / f"moodboard_{uuid.uuid4().hex[:8]}.jpg"
+                styling = data.get("styling") or []
+                props = data.get("props") or []
+                shots = data.get("shot_list") or []
+                outfit_sections = [
+                    {"role": "Образ для Нее", "items": styling[:4], "tip": "Натуральные фактуры и комфорт"},
+                    {"role": "Образ для Него / Семьи", "items": styling[4:8] or ["Базовые спокойные тона в тон палитре"], "tip": "Без мелкой клетки и крупных лого"},
+                    {"role": "Реквизит и Детали", "items": props[:4] or ["Живые предметы для непринужденного кадра"], "tip": "Фактура и атмосфера"},
+                    {"role": "Ключевые Кадры", "items": [s.get("plan", "") + ": " + ", ".join(s.get("key_shots", [])[:2]) for s in shots[:3]] or ["Портреты и живые эмоции"], "tip": "Естественный свет и контакт"}
+                ]
+                render_moodboard_card(
+                    title=data.get("title") or "Мудборд съемки",
+                    subtitle=data.get("concept") or "Индивидуальный гид по стилю и свету",
+                    photographer_name=profile.identity or "Фотограф",
+                    city=profile.city or "",
+                    palette=data.get("color_palette") or [],
+                    outfit_sections=outfit_sections,
+                    location_note=str(data.get("location") or ""),
+                    output_path=str(card_file)
+                )
+                if card_file.exists():
+                    data["image_path"] = str(card_file)
+            except Exception:
+                pass
         elif action_id=="shoot.audit": data=brain.shooting_engine.audit_profile_and_grid(image_path or text,profile=profile,use_llm=use_llm)
         elif action_id=="shoot.critique":
             if not image_path: raise MissingActionInput(action.prompt)
@@ -266,5 +305,91 @@ class GuidedActionService:
         elif action_id=="promo.reviews": data=self.promo.repurpose_review(text,profile,use_llm)
         elif action_id=="work.today": data=brain.proactive_engine.generate_daily_plan(profile=profile,use_llm=use_llm)
         else: raise KeyError(action_id)
-        markdown = self._image_markdown(action,data) if action_id in IMAGE_ACTIONS else f"✅ **{action.label}**\n\n{self._format(data)}"
+        markdown = self._format_markdown(action, action_id, data)
         return {"action_id":action_id,"title":action.label,"data":data,"markdown":markdown,"image_path":data.get("image_path") if isinstance(data,dict) else None}
+
+    def _format_markdown(self, action, action_id, data):
+        if action_id in IMAGE_ACTIONS:
+            return self._image_markdown(action, data)
+        if not isinstance(data, dict):
+            return f"✅ **{action.label}**\n\n{self._format(data)}"
+
+        # 1. Sales Dialogue (Card 1: Client reply, Card 2: Coach note)
+        if action_id == "sales.dialogue" and "response_options" in data:
+            resp_opts = data.get("response_options") or {}
+            caring = resp_opts.get("caring") or ""
+            val_resp = resp_opts.get("value_focused") or ""
+            alt_resp = resp_opts.get("alternative") or ""
+            means = data.get("what_client_really_means") or ""
+            strat = data.get("recommended_strategy") or ""
+            not_to_say = data.get("what_not_to_say") or ""
+            parts = [f"✅ **{action.label}**"]
+            if caring:
+                parts.append(f"💌 **Сообщение клиентке:**\n«{caring}»")
+            coaching = []
+            if means:
+                coaching.append(f"• **Что на самом деле имеет в виду клиент:**\n{means}")
+            if strat:
+                coaching.append(f"• **Стратегия ответа:**\n{strat}")
+            if val_resp:
+                coaching.append(f"• **Вариант с раскрытием ценности:**\n«{val_resp}»")
+            if alt_resp:
+                coaching.append(f"• **Альтернативный вариант (мягкий вход/формат):**\n«{alt_resp}»")
+            if not_to_say:
+                coaching.append(f"• 🚫 **Чего говорить нельзя:**\n{not_to_say}")
+            if coaching:
+                parts.append("💡 **Совет фотографу:**\n" + "\n\n".join(coaching))
+            return "\n\n".join(parts)
+
+        # 2. Account and Grid Audit
+        if action_id == "shoot.audit" and data.get("full_formatted_audit"):
+            return f"✅ **{action.label}**\n\n{data['full_formatted_audit']}"
+
+        # 3. Moodboard Lookbook Card
+        if action_id == "shoot.moodboard" and data.get("card_markdown"):
+            return f"✅ **{action.label}**\n\n{data['card_markdown']}"
+
+        # 4. Music Recommendations
+        if action_id == "shoot.music" and data.get("formatted_recommendations"):
+            tail = f"\n\n💡 *{data['licensing_note']}*" if data.get("licensing_note") else ""
+            return f"✅ **{action.label}**\n\n{data['formatted_recommendations']}{tail}"
+
+        # 5. Photo Critique
+        if action_id == "shoot.critique" and data.get("description"):
+            return f"✅ **{action.label}**\n\n{data['description']}"
+
+        # 6. Stories 9-Step Arc
+        if action_id == "content.stories" and data.get("steps") and isinstance(data["steps"], list):
+            topic = data.get("topic") or "Сторис-арка"
+            out = [f"✅ **{action.label}**\n📖 **Тема:** {topic}"]
+            for s in data["steps"]:
+                if isinstance(s, dict):
+                    num = s.get("step_number", "")
+                    name = s.get("step_name", "")
+                    vis = s.get("visual", "")
+                    text = s.get("text_on_screen", "")
+                    sticker = s.get("sticker")
+                    card = f"**{num}. {name}**\n📸 *Визуал:* {vis}\n💬 *Текст на экране:* {text}"
+                    if sticker:
+                        card += f"\n🔘 *Интерактив:* {sticker}"
+                    out.append(card)
+            return "\n\n".join(out)
+
+        # 7. Price List
+        if action_id == "sales.price" and data.get("tiers") and isinstance(data["tiers"], list):
+            base = data.get("base_price", "")
+            out = [f"✅ **{action.label}**\n💰 **Базовый чек:** {base}"]
+            for t in data["tiers"]:
+                if isinstance(t, dict):
+                    name = t.get("name", "")
+                    p = t.get("price", "")
+                    feats = "\n".join(f"  • {f}" for f in t.get("features", []))
+                    emoji = "🌿" if "ЛАЙТ" in name else "⭐" if "ОПТИМАЛЬНЫЙ" in name else "👑"
+                    label_extra = " (Выбор большинства)" if "ОПТИМАЛЬНЫЙ" in name else ""
+                    out.append(f"{emoji} **{name}{label_extra}** — `{p}`\n{feats}")
+            note = data.get("note")
+            if note:
+                out.append(f"💡 *{note}*")
+            return "\n\n".join(out)
+
+        return f"✅ **{action.label}**\n\n{self._format(data)}"

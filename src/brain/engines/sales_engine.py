@@ -225,7 +225,7 @@ class SalesEngine:
                 f"«{name_greeting} за честную обратную связь! Буду рада ответить на любые вопросы и подобрать для вас идеальный вариант съёмки»."
             )
 
-    def evaluate_pricing_ladder(self, packages: List[Dict[str, Any]], use_llm: bool = True) -> Dict[str, Any]:
+    def evaluate_pricing_ladder(self, packages: Any, use_llm: bool = True) -> Dict[str, Any]:
         """
         Evaluates photographer's package structure (Basic, Optimal, Premium)
         and detects cannibalization or missing upsells.
@@ -233,6 +233,55 @@ class SalesEngine:
         if not packages:
             return {
                 "status": "NO_DATA",
+                "cannibalization_risk": False,
+                "recommendations": ["Добавьте 3 ясных пакета: Минимальный (знакомство), Оптимальный (базовый выбор 70% клиентов), Премиум (максимум сервиса)."]
+            }
+
+        import re
+
+        if isinstance(packages, str):
+            pkg_list = []
+            for line in packages.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    pkg_list.append({"name": k.strip(), "price": v.strip()})
+                else:
+                    pkg_list.append({"name": line, "price": line})
+            packages = pkg_list
+        elif isinstance(packages, dict):
+            pkg_list = []
+            for name, data in packages.items():
+                if isinstance(data, dict):
+                    item = dict(data)
+                    item.setdefault("name", name)
+                else:
+                    item = {"name": name, "price": data}
+                pkg_list.append(item)
+            packages = pkg_list
+        elif isinstance(packages, list):
+            normalized = []
+            for item in packages:
+                if isinstance(item, dict):
+                    normalized.append(dict(item))
+                elif isinstance(item, str):
+                    if ":" in item:
+                        k, v = item.split(":", 1)
+                        normalized.append({"name": k.strip(), "price": v.strip()})
+                    else:
+                        normalized.append({"name": item, "price": item})
+                else:
+                    normalized.append({"name": str(item), "price": item})
+            packages = normalized
+        else:
+            packages = []
+
+        if not packages:
+            return {
+                "status": "NO_DATA",
+                "cannibalization_risk": False,
                 "recommendations": ["Добавьте 3 ясных пакета: Минимальный (знакомство), Оптимальный (базовый выбор 70% клиентов), Премиум (максимум сервиса)."]
             }
 
@@ -263,6 +312,9 @@ class SalesEngine:
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                     parsed = json.loads(clean)
                     if isinstance(parsed, dict) and "pricing_anchor_advice" in parsed:
+                        issues_raw = parsed.get("issues_detected", [])
+                        cann_risk = any("каннибал" in str(i).lower() or "перегруз" in str(i).lower() for i in issues_raw)
+                        parsed.setdefault("cannibalization_risk", cann_risk)
                         return parsed
             except Exception:
                 pass
@@ -274,8 +326,35 @@ class SalesEngine:
             recommendations.append("Создайте трехпакетную линейку: Экспресс / Стандарт / Премиум.")
 
         # Check cannibalization: if package 1 offers too much
-        p1 = packages[0]
-        if p1.get("duration_hours", 1) >= 2 or p1.get("retouched_photos", 10) >= 30:
+        cannibalization_risk = False
+        p1 = packages[0] if packages else {}
+        p1_text = " ".join(str(val) for val in p1.values())
+        p1_dur_raw = p1.get("duration_hours") or p1.get("duration")
+        if p1_dur_raw is None:
+            m_d = re.search(r"(\d+(?:[.,]\d+)?)\s*(?:час|ч\b|hour)", p1_text, re.IGNORECASE)
+            p1_dur_raw = m_d.group(1) if m_d else 1
+        if isinstance(p1_dur_raw, (int, float)):
+            p1_dur = float(p1_dur_raw)
+        elif isinstance(p1_dur_raw, str):
+            nums = re.findall(r"\d+(?:[.,]\d+)?", p1_dur_raw)
+            p1_dur = float(nums[0].replace(",", ".")) if nums else 1.0
+        else:
+            p1_dur = 1.0
+
+        p1_photos_raw = p1.get("retouched_photos") or p1.get("photos")
+        if p1_photos_raw is None:
+            m_p = re.search(r"(\d+)\s*(?:фото|кадр|снимок|photo)", p1_text, re.IGNORECASE)
+            p1_photos_raw = m_p.group(1) if m_p else 10
+        if isinstance(p1_photos_raw, (int, float)):
+            p1_photos = int(p1_photos_raw)
+        elif isinstance(p1_photos_raw, str):
+            nums = re.findall(r"\d+", p1_photos_raw)
+            p1_photos = int(nums[0]) if nums else 10
+        else:
+            p1_photos = 10
+
+        if p1_dur >= 2 or p1_photos >= 30:
+            cannibalization_risk = True
             issues.append("Первый (младший) пакет перегружен: клиентам незачем брать средний тариф.")
             recommendations.append("Сократите первый пакет до 40-50 минут и 15 кадров, чтобы Оптимальный тариф стал самым привлекательным.")
 
@@ -283,6 +362,7 @@ class SalesEngine:
 
         return {
             "total_packages": len(packages),
+            "cannibalization_risk": cannibalization_risk,
             "issues_detected": issues,
             "recommendations": recommendations,
             "pricing_anchor_advice": "Сделайте средний пакет наиболее выгодным по соотношению времени и отдачи кадров."

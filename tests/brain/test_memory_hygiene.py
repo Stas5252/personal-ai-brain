@@ -23,8 +23,16 @@ def test_owner_sources_are_recognised():
     assert mh.is_owner_source(mh.OWNER)
     assert mh.is_owner_source(mh.VOICE)
     assert mh.is_owner_source(None)  # по умолчанию говорит владелица
+    assert mh.is_owner_source("unit_test")
+    assert mh.is_owner_source("user_statement")
+    assert mh.is_owner_source("shoot_debrief")
     assert not mh.is_owner_source(mh.FORWARDED)
     assert not mh.is_owner_source(mh.DOCUMENT)
+    assert not mh.is_owner_source("contest")
+    assert not mh.is_owner_source("external_testimony")
+    assert not mh.is_owner_source("attestation")
+    assert not mh.is_owner_source("speedtest")
+    assert not mh.is_owner_source("user_fake")
 
 
 # -- числа -------------------------------------------------------------

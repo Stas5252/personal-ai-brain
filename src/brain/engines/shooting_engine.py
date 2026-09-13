@@ -389,6 +389,8 @@ class ShootingEngine:
 
         return self.critique_shot(image_path, prompt=critique_prompt)
 
+    critique_photograph = analyze_photo_with_critique
+
     def audit_profile_and_grid(
         self,
         target: str,

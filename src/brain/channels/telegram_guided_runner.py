@@ -279,6 +279,10 @@ class GuidedBot(legacy.Bot):
                 if message.get("document") or message.get("video"): raise ValueError("В мастере используй текст или скриншот; документ можно добавить через /знания.")
                 text,image=self._collect(message,temp)
                 result=self.guided.execute(action_id,self.brain,text=text,image_path=image,use_llm=True); self.state.put(self._key(),None)
+                if result.get("markdown"):
+                    from src.brain.services.guided_actions import ACTION_BY_ID
+                    lbl = ACTION_BY_ID[action_id].label if action_id in ACTION_BY_ID else action_id
+                    self._remember_turn(f"[{lbl}] {text}".strip(), result["markdown"])
                 return self._deliver(chat,result)
         finally:
             for item in temp: Path(item).unlink(missing_ok=True)
@@ -287,6 +291,10 @@ class GuidedBot(legacy.Bot):
         """Runs an action that needs no input from her (photo generation included)."""
         with self.media.typing(chat,self._status(action_id)):
             result=self.guided.execute(action_id,self.brain,use_llm=True)
+            if result.get("markdown"):
+                from src.brain.services.guided_actions import ACTION_BY_ID
+                lbl = ACTION_BY_ID[action_id].label if action_id in ACTION_BY_ID else action_id
+                self._remember_turn(f"[{lbl}]", result["markdown"])
         return self._deliver(chat,result)
 
     def _legacy_command(self,message):
@@ -598,7 +606,18 @@ class GuidedBot(legacy.Bot):
         if text=="/cancel" and (pending or self.state.get(self._learn_key())):
             self.state.put(self._key(),None); self.state.put(self._learn_key(),None); return self._say(chat,"Остановил.")
         if text.startswith("/"):
-            return self._defer(chat,self._legacy_command,message)
+            cmd = text.split()[0].lower()
+            if cmd == "/boost":
+                return self._say(chat, "⚡ Режим максимального качества активен: используются 6 уровней базы знаний, память профиля, калибровка стиля и строгий фильтр фактов.\n\nВсе команды бота: /help")
+            legacy_cmds = {
+                "/brief", "/reset", "/знания", "/knowledge",
+                "/library", "/библиотека", "/biblioteka",
+                "/uroki", "/уроки", "/urok",
+                "/help", "/помощь", "/pomosh",
+            }
+            if cmd in legacy_cmds:
+                return self._defer(chat, self._legacy_command, message)
+            return self._say(chat, f"Неизвестная команда `{cmd}`.\n\nНапиши /help для списка доступных команд или выбери действие в меню.")
         if text in ACTION_BY_LABEL:
             self.state.put(self._learn_key(),None)
             action=ACTION_BY_LABEL[text]; start=self.guided.start(action.action_id)

@@ -20,6 +20,8 @@ import argparse
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8')
 
 
 def main():
@@ -28,7 +30,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument('--name', required=True, help="Photographer's name")
+    parser.add_argument('--name', default='', help="Photographer's name")
     parser.add_argument('--city', default='', help='City where you shoot')
     parser.add_argument('--niche', default='', help='Photography niche')
     parser.add_argument('--services', nargs='*', default=[])
@@ -37,7 +39,9 @@ def main():
     parser.add_argument('--price-optimal', default='')
     parser.add_argument('--price-premium', default='')
     parser.add_argument('--tone', default='Теплый, искренний, без клише')
+    parser.add_argument('--audience', default='')
     parser.add_argument('--goals', nargs='*', default=[])
+    parser.add_argument('--forbidden-words', nargs='*', default=[])
     args = parser.parse_args()
 
     try:
@@ -49,13 +53,15 @@ def main():
 
     engine = ProfileEngine()
     profile = engine.get_profile()
-    profile.identity = args.name
+    if args.name: profile.identity = args.name
     if args.city: profile.city = args.city
     if args.niche: profile.niche = args.niche
     if args.services: profile.services = args.services
     if args.genres: profile.genres = args.genres
     if args.tone: profile.tone = args.tone
+    if args.audience: profile.audience = args.audience
     if args.goals: profile.goals = args.goals
+    if args.forbidden_words: profile.forbidden_words = args.forbidden_words
 
     if args.price_light or args.price_optimal or args.price_premium:
         profile.pricing = {}

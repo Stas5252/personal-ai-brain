@@ -93,9 +93,15 @@ class LLMProvider:
                     err_body = e.read().decode("utf-8")
                     last_err = f"HTTP {e.code} on {m}: {err_body[:150]}"
                     if e.code == 429:
-                        # Rapid recovery on rate limit: retry once or switch to next model immediately
-                        if attempt == 0:
-                            time.sleep(1.0)
+                        # Rate limit: Google free tier allows 15 RPM. Sleep 5-10s to clear the minute window.
+                        if attempt < max_retries_per_model:
+                            time.sleep(5.0 * (attempt + 1))
+                            continue
+                        else:
+                            break
+                    elif e.code in (500, 502, 503, 504):
+                        if attempt < max_retries_per_model:
+                            time.sleep(1.5 * (attempt + 1))
                             continue
                         else:
                             break

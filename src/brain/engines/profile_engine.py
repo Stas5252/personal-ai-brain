@@ -181,11 +181,23 @@ class ProfileEngine:
         forbidden_topics = []
         for item in forbidden_raw.replace(";", ",").split(","):
             cleaned = item.replace("Не использовать:", "").replace("не использовать", "").strip().strip("'\"")
+            # Strip natural phrases like "не люблю слово", "без слов", etc.
+            import re
+            m = re.sub(
+                r"^(?:не\s+(?:люблю|нравится|использовать|пиши|надо|употребляй)|без|запрещено)\s*(?:слов[аоуые]?|фраз[ауые]|выражени[еяй]|штамп[аоуые]?)*\s*",
+                "",
+                cleaned,
+                flags=re.IGNORECASE,
+            ).strip().strip("'\"«»")
+            if m:
+                cleaned = m
             if cleaned:
                 if len(cleaned.split()) > 3:
                     forbidden_topics.append(cleaned)
                 else:
                     forbidden_words.append(cleaned)
+        forbidden_words = list(dict.fromkeys(forbidden_words))
+        forbidden_topics = list(dict.fromkeys(forbidden_topics))
         goals_list = [g.strip() for g in answers.get("goals", "").replace(";", ",").split(",") if g.strip()]
         return UserProfile(
             identity=answers.get("identity", ""),
@@ -250,7 +262,13 @@ class ProfileEngine:
                 clean = resp_text.strip()
                 if clean.startswith("```"):
                     clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                extracted_data = json.loads(clean)
+                # Use regex to find outermost JSON object if LLM provided extra commentary
+                import re
+                json_match = re.search(r"\{.*\}", clean, re.DOTALL)
+                if json_match:
+                    extracted_data = json.loads(json_match.group(0))
+                else:
+                    extracted_data = json.loads(clean)
         except Exception as e:
             print(f"[!] Error extracting profile via LLM: {e}")
 
@@ -259,11 +277,14 @@ class ProfileEngine:
         if not extracted_data.get("identity"):
             m_name = re.search(r"меня зовут\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+)?)", text, re.IGNORECASE)
             if not m_name:
-                m_name = re.search(r"(?:\bя\s*[—–-]\s*|\bя\s+)([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)", text)
-            if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий"]:
+                m_name = re.search(
+                    r"(?:\b[яЯ]\s*[,—–-]?\s*)(?:(?:свадебный|семейный|портретный|fashion|коммерческий|начинающий|опытный)?\s*фотограф\s+)?([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)",
+                    text
+                )
+            if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий", "свадебный", "семейный"]:
                 extracted_data["identity"] = m_name.group(1).strip()
         if not extracted_data.get("city"):
-            m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)", text)
+            m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[а-яёА-ЯЁ]+)*)", text, re.IGNORECASE)
             if m_city:
                 c_val = m_city.group(1).strip()
                 c_low = c_val.lower()
@@ -271,15 +292,23 @@ class ProfileEngine:
                     extracted_data["city"] = "Москва"
                 elif "питер" in c_low or "петербург" in c_low:
                     extracted_data["city"] = "Санкт-Петербург"
+                elif "ростов" in c_low:
+                    extracted_data["city"] = "Ростов-на-Дону"
                 elif "самар" in c_low:
                     extracted_data["city"] = "Самара"
                 elif "казан" in c_low:
                     extracted_data["city"] = "Казань"
+                elif "нижн" in c_low:
+                    extracted_data["city"] = "Нижний Новгород"
                 elif "новосибирск" in c_low:
                     extracted_data["city"] = "Новосибирск"
                 elif "екатеринбург" in c_low:
                     extracted_data["city"] = "Екатеринбург"
-                elif c_val.endswith("е") or c_val.endswith("ы"):
+                elif "тюмен" in c_low:
+                    extracted_data["city"] = "Тюмень"
+                elif "перм" in c_low:
+                    extracted_data["city"] = "Пермь"
+                elif c_val.endswith(("е", "ы")):
                     extracted_data["city"] = c_val[:-1] + "а"
                 else:
                     extracted_data["city"] = c_val
@@ -287,6 +316,39 @@ class ProfileEngine:
             m_niche = re.search(r"(?:снимаю|ниша|специализаци[яи]|фотографирую)\s+([^.,;\n]+)", text, re.IGNORECASE)
             if m_niche:
                 extracted_data["niche"] = m_niche.group(1).strip()
+        if not extracted_data.get("pricing"):
+            m_price = re.search(r"(?:чек|прайс|цена|стоимость)\s*(?:от)?\s*(\d[\d\s\u00a0]*)\s*(?:руб|₽|k|к)?", text, re.IGNORECASE)
+            if m_price:
+                raw_p = re.sub(r"[\s\u00a0]", "", m_price.group(1))
+                if raw_p.isdigit() and int(raw_p) >= 500:
+                    extracted_data["pricing"] = {"Базовый": f"{m_price.group(1).strip()} руб"}
+        # Forbidden words fallback: catch phrases like
+        # "не люблю слово красотка", "убери волшебство и уникальный"
+        if not extracted_data.get("forbidden_words"):
+            bans: list[str] = []
+            # Pattern 1: "не люблю слово X" / "не пиши слово X"
+            for m in re.finditer(
+                r"(?:не\s+(?:люблю|нравится|пиши|используй|надо|нужно))\s+"
+                r"(?:слов[оа]|фраз[уы]|выражени[ея])?\s*[«\"']?([^»\"',;.\n]+)[»\"']?",
+                text, re.IGNORECASE,
+            ):
+                for word in re.split(r"\s+и\s+|\s*,\s*", m.group(1)):
+                    w = word.strip().strip("«»\"'")
+                    w = re.sub(r"^(?:слов[аоуые]?|фраз[ауые]|выражени[еяй])\s+", "", w, flags=re.IGNORECASE).strip()
+                    if w and len(w) >= 2:
+                        bans.append(w)
+            # Pattern 2: "убери слово X" / "без слова X"
+            for m in re.finditer(
+                r"(?:убери|удали|без)\s+(?:слов[оа]|фраз[уы]|выражени[ея])?\s*[«\"']?([^»\"',;.\n]+)[»\"']?",
+                text, re.IGNORECASE,
+            ):
+                for word in re.split(r"\s+и\s+|\s*,\s*", m.group(1)):
+                    w = word.strip().strip("«»\"'")
+                    w = re.sub(r"^(?:слов[аоуые]?|фраз[ауые]|выражени[еяй])\s+", "", w, flags=re.IGNORECASE).strip()
+                    if w and len(w) >= 2:
+                        bans.append(w)
+            if bans:
+                extracted_data["forbidden_words"] = list(dict.fromkeys(bans))
 
         current = self.get_profile()
         # The extraction prompt never returns visual, content, sales or brand
@@ -325,9 +387,9 @@ class ProfileEngine:
             from src.brain.models.memory import MemoryType
             me = MemoryEngine()
             if saved.identity:
-                me.add_memory(content=f"Фотографа зовут: {saved.identity}", memory_type=MemoryType.CORE_FACT, importance=1.0)
+                me.add_memory(content=f"Фотографа зовут: {saved.identity}", memory_type=MemoryType.PROFILE, importance=1.0)
             if saved.niche:
-                me.add_memory(content=f"Специализация и ниша: {saved.niche} в городе {saved.city or 'не указан'}", memory_type=MemoryType.CORE_FACT, importance=0.95)
+                me.add_memory(content=f"Специализация и ниша: {saved.niche} в городе {saved.city or 'не указан'}", memory_type=MemoryType.PROFILE, importance=0.95)
             if saved.goals:
                 me.add_memory(content=f"Цели фотографа: {', '.join(saved.goals)}", memory_type=MemoryType.GOAL, importance=0.9)
         except Exception:

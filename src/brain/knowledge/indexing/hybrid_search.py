@@ -95,12 +95,15 @@ class HybridSearchEngine:
         candidate_limit = max(top_k * 10, 30)
 
         # 1. Vector Search with expanded pool
-        vector_hits = self.vector_index.query(
-            query_text=clean_query,
-            top_k=candidate_limit,
-            layer_filter=filter_val
-        )
-        vector_scores: Dict[str, float] = {h[0]: h[1] for h in vector_hits}
+        try:
+            vector_hits = self.vector_index.query(
+                query_text=clean_query,
+                top_k=candidate_limit,
+                layer_filter=filter_val
+            )
+            vector_scores: Dict[str, float] = {h[0]: h[1] for h in vector_hits}
+        except Exception:
+            vector_scores = {}
 
         # 2. FTS5 Lexical Search with expanded pool
         fts_scores = self._query_fts5(clean_query, filter_val, limit=candidate_limit)

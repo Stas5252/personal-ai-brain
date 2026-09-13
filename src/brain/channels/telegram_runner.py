@@ -135,7 +135,7 @@ class Bot:
             or message.get('from', {}).get('id')
         )
         session_key = f'onboarding:{self.owner}'
-        profile = self.brain.profile_engine
+        profile = getattr(self.brain, 'profile_engine', None)
 
         self._track_activity()
 

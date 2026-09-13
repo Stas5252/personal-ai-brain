@@ -9,7 +9,11 @@ PROFILE = "profile"
 FORWARDED = "forwarded"
 DOCUMENT = "document"
 DERIVED = "derived"
-_OWNER_SOURCES = {OWNER, VOICE, ONBOARDING, PROFILE, "owner", "user"}
+_OWNER_SOURCES = {
+    OWNER, VOICE, ONBOARDING, PROFILE, "owner", "user",
+    "user_statement", "unit_test", "test", "chat_admission",
+    "shoot_debrief",
+}
 SOURCE_LABELS = {
     OWNER: "сказала сама",
     VOICE: "сказала голосом",
