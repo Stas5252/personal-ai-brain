@@ -171,14 +171,22 @@ def delete_source(source_id: str):
             raise HTTPException(409, "Knowledge writer is active; retry deletion later.")
         connection = get_connection()
         try:
-            row = connection.execute("SELECT 1 FROM knowledge_sources WHERE source_id=?", (source_id,)).fetchone()
+            row = connection.execute(
+                "SELECT (SELECT COUNT(*) FROM knowledge_chunks WHERE source_id=?) AS purged_chunks "
+                "FROM knowledge_sources WHERE source_id=?",
+                (source_id, source_id),
+            ).fetchone()
         finally:
             connection.close()
         if row is None:
             raise HTTPException(404, "Knowledge source not found")
         from src.brain.knowledge.factory import KnowledgeIngestionFactory
         KnowledgeIngestionFactory().delete_source(source_id)
-    return {"status": "deleted", "source_id": source_id}
+    return {
+        "status": "deleted",
+        "source_id": source_id,
+        "purged_chunks": row["purged_chunks"],
+    }
 
 
 @router.get("/sources/{source_id}/status")
