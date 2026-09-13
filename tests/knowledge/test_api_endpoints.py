@@ -1,76 +1,66 @@
-"""
-Tests for Knowledge REST API Endpoints.
-Covers source upload, listing, details, status, hybrid search, reprocessing, and stats.
-"""
+"""Queued knowledge API contract tests."""
+import os
+
 import pytest
 from fastapi.testclient import TestClient
+
 from src.brain.api.app import app
+
 
 @pytest.fixture
 def client():
-    import os
-    key = os.environ.get('BRAIN_API_KEY', 'regression-only-not-a-production-key-0001')
+    key = os.environ.get("BRAIN_API_KEY", "regression-only-not-a-production-key-0001")
     return TestClient(app, headers={"Authorization": f"Bearer {key}"})
 
 
 def test_api_health(client):
-    res = client.get("/health")
-    assert res.status_code == 200
-    assert res.json()["service"] == "Personal AI Brain"
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json()["service"] == "Personal AI Brain"
 
 
 def test_api_knowledge_stats(client):
-    res = client.get("/knowledge/stats")
-    assert res.status_code == 200
-    data = res.json()
-    assert "total_sources" in data
-    assert "total_chunks" in data
-    assert "by_layer" in data
-    assert "vector_index_count" in data
+    response = client.get("/knowledge/stats")
+    assert response.status_code == 200
+    data = response.json()
+    assert {"total_sources", "total_chunks", "by_layer", "by_status", "queue"} <= data.keys()
 
 
-def test_api_create_and_delete_source(client):
-    # 1. Create text source
-    payload = {
+def test_text_registration_returns_canonical_job_contract(client):
+    response = client.post("/knowledge/sources", data={
         "title": "API Test Rules",
-        "content": "Правила студии: курение запрещено, сменная обувь обязательна.",
+        "content": "# Правила\n\nСменная обувь обязательна.",
         "layer": "professional",
-        "author": "Manager"
-    }
-    create_res = client.post("/knowledge/sources", data=payload)
-    assert create_res.status_code == 200
-    res_data = create_res.json()
-    source_id = res_data["source"]["source_id"]
-    assert res_data["chunks_count"] > 0
+        "author": "Manager",
+    })
+    assert response.status_code == 202
+    body = response.json()
+    assert response.headers["location"] == body["status_url"]
+    assert body["status"] == "DISCOVERED"
+    assert body["progress"] == 0.0
+    job = client.get(body["status_url"])
+    assert job.status_code == 200
+    contract = job.json()
+    assert contract["job_id"] == body["job_id"]
+    assert contract["source_id"] == body["source_id"]
+    assert contract["status"] == "DISCOVERED"
+    assert contract["terminal"] is False
+    detail = client.get(f"/knowledge/sources/{body['source_id']}")
+    assert detail.status_code == 200
+    assert detail.json()["source"]["status"] == "DISCOVERED"
+    assert detail.json()["chunks"] == []
 
-    # 2. Get source detail
-    detail_res = client.get(f"/knowledge/sources/{source_id}")
-    assert detail_res.status_code == 200
-    detail = detail_res.json()
-    assert detail["source"]["title"] == "API Test Rules"
-    assert len(detail["chunks"]) > 0
 
-    # 3. Check status endpoint
-    status_res = client.get(f"/knowledge/sources/{source_id}/status")
-    assert status_res.status_code == 200
-    assert status_res.json()["status"] == "COMPLETED"
+def test_duplicate_registration_reuses_active_job(client):
+    payload = {"title": "Same", "content": "# Same\n\nAtomic duplicate registration."}
+    first = client.post("/knowledge/sources", data=payload)
+    second = client.post("/knowledge/sources", data=payload)
+    assert first.status_code == second.status_code == 202
+    assert second.json()["job_id"] == first.json()["job_id"]
+    assert second.json()["source_id"] == first.json()["source_id"]
+    assert second.json()["duplicate"] is True
 
-    # 4. Search for the chunk
-    search_payload = {
-        "query": "сменная обувь в студии",
-        "limit": 3
-    }
-    search_res = client.post("/knowledge/search", json=search_payload)
-    assert search_res.status_code == 200
-    hits = search_res.json()["results"]
-    assert len(hits) > 0
-    assert any("сменная обувь" in h["chunk"]["content"] for h in hits)
 
-    # 5. Delete source
-    del_res = client.delete(f"/knowledge/sources/{source_id}")
-    assert del_res.status_code == 200
-    assert del_res.json()["status"] == "deleted"
-
-    # 6. Verify 404 after deletion
-    get_again = client.get(f"/knowledge/sources/{source_id}")
-    assert get_again.status_code == 404
+def test_online_delete_is_not_a_second_materialization_writer(client):
+    response = client.delete("/knowledge/sources/does-not-matter")
+    assert response.status_code == 409
