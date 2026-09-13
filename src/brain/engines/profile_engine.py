@@ -259,7 +259,7 @@ class ProfileEngine:
         if not extracted_data.get("identity"):
             m_name = re.search(r"меня зовут\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+)?)", text, re.IGNORECASE)
             if not m_name:
-                m_name = re.search(r"(?:\bя\s*[—–-]\s*|\bя\s+)([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)", text)
+                m_name = re.search(r"(?:\b[яЯ]\s*[—–-]\s*|\b[яЯ]\s+)([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)", text)
             if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий"]:
                 extracted_data["identity"] = m_name.group(1).strip()
         if not extracted_data.get("city"):

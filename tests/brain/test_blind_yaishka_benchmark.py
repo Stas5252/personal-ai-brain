@@ -118,7 +118,36 @@ def benchmark_brain():
         forbidden_words=["красоточка", "волшебство", "уникальный прайс", "скидочка", "налетай"],
     )
     b.profile_engine.save_profile(p)
-    return b
+    from src.brain.db import get_connection
+    conn = get_connection()
+    initial_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
+    initial_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
+    initial_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
+    initial_task_ids = {row["id"] for row in conn.execute("SELECT id FROM tasks").fetchall()}
+    conn.close()
+
+    yield b
+
+    conn = get_connection()
+    try:
+        all_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
+        all_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
+        all_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
+        all_task_ids = {row["id"] for row in conn.execute("SELECT id FROM tasks").fetchall()}
+
+        for mid in (all_mem_ids - initial_mem_ids):
+            conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
+        for pid in (all_proj_ids - initial_proj_ids):
+            conn.execute("DELETE FROM projects WHERE id = ?", (pid,))
+        for wfid in (all_wf_ids - initial_wf_ids):
+            conn.execute("DELETE FROM workflows WHERE workflow_id = ?", (wfid,))
+        for tid in (all_task_ids - initial_task_ids):
+            conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        conn.close()
 
 
 # ===========================================================================
@@ -591,7 +620,7 @@ def test_blind_benchmark_cat4_task18_price_refusal_to_guess():
 def test_blind_benchmark_cat4_task19_commercial_offer():
     t0 = time.monotonic()
     se = SalesEngine()
-    client = Client(name="Brand X", service="Каталог", budget="30 000 руб")
+    client = Client(id="client-brand-x", name="Brand X", service="Каталог", budget="30 000 руб")
     # Rule baseline analysis
     analysis = se.analyze_client_dialogue("Нужен каталог на 30 кадров", client=client, use_llm=False)
     dt = time.monotonic() - t0
@@ -1168,6 +1197,7 @@ def test_blind_benchmark_cat8_task40_style_habit_learning():
     voice = measure_voice([
         "Свет решает всё. Например, окно даёт тень. Напиши в директ.",
         "Поза важна. Например, расправь плечи. Пиши в директ.",
+        "Цвет задаёт настроение. Например, закат красит кадр. Пиши в директ.",
     ])
     dt = time.monotonic() - t0
 

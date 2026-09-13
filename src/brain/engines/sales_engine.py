@@ -225,7 +225,7 @@ class SalesEngine:
                 f"«{name_greeting} за честную обратную связь! Буду рада ответить на любые вопросы и подобрать для вас идеальный вариант съёмки»."
             )
 
-    def evaluate_pricing_ladder(self, packages: List[Dict[str, Any]], use_llm: bool = True) -> Dict[str, Any]:
+    def evaluate_pricing_ladder(self, packages: Any, use_llm: bool = True) -> Dict[str, Any]:
         """
         Evaluates photographer's package structure (Basic, Optimal, Premium)
         and detects cannibalization or missing upsells.
@@ -233,8 +233,22 @@ class SalesEngine:
         if not packages:
             return {
                 "status": "NO_DATA",
+                "cannibalization_risk": False,
                 "recommendations": ["Добавьте 3 ясных пакета: Минимальный (знакомство), Оптимальный (базовый выбор 70% клиентов), Премиум (максимум сервиса)."]
             }
+
+        import re
+
+        if isinstance(packages, dict):
+            pkg_list = []
+            for name, data in packages.items():
+                if isinstance(data, dict):
+                    item = dict(data)
+                    item.setdefault("name", name)
+                else:
+                    item = {"name": name, "price": data}
+                pkg_list.append(item)
+            packages = pkg_list
 
         if use_llm:
             try:
@@ -263,6 +277,9 @@ class SalesEngine:
                         clean = clean.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
                     parsed = json.loads(clean)
                     if isinstance(parsed, dict) and "pricing_anchor_advice" in parsed:
+                        issues_raw = parsed.get("issues_detected", [])
+                        cann_risk = any("каннибал" in str(i).lower() or "перегруз" in str(i).lower() for i in issues_raw)
+                        parsed.setdefault("cannibalization_risk", cann_risk)
                         return parsed
             except Exception:
                 pass
@@ -274,8 +291,20 @@ class SalesEngine:
             recommendations.append("Создайте трехпакетную линейку: Экспресс / Стандарт / Премиум.")
 
         # Check cannibalization: if package 1 offers too much
-        p1 = packages[0]
-        if p1.get("duration_hours", 1) >= 2 or p1.get("retouched_photos", 10) >= 30:
+        cannibalization_risk = False
+        p1 = packages[0] if packages else {}
+        p1_dur = p1.get("duration_hours") or p1.get("duration") or 1
+        if isinstance(p1_dur, str):
+            nums = re.findall(r"\d+", p1_dur)
+            p1_dur = int(nums[0]) if nums else 1
+
+        p1_photos = p1.get("retouched_photos") or p1.get("photos") or 10
+        if isinstance(p1_photos, str):
+            nums = re.findall(r"\d+", p1_photos)
+            p1_photos = int(nums[0]) if nums else 10
+
+        if p1_dur >= 2 or p1_photos >= 30:
+            cannibalization_risk = True
             issues.append("Первый (младший) пакет перегружен: клиентам незачем брать средний тариф.")
             recommendations.append("Сократите первый пакет до 40-50 минут и 15 кадров, чтобы Оптимальный тариф стал самым привлекательным.")
 
@@ -283,6 +312,7 @@ class SalesEngine:
 
         return {
             "total_packages": len(packages),
+            "cannibalization_risk": cannibalization_risk,
             "issues_detected": issues,
             "recommendations": recommendations,
             "pricing_anchor_advice": "Сделайте средний пакет наиболее выгодным по соотношению времени и отдачи кадров."
