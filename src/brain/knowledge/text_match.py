@@ -53,7 +53,7 @@ LAYER_BONUS = 0.06
 
 # Letters only. Years and prices are not retrieval signal and they used to add
 # noise to the token set.
-_WORD = re.compile(r"[^\W\d_]+", re.UNICODE)
+_WORD = re.compile(r"[^\\W\\d_]+", re.UNICODE)
 
 # Function words carry no signal but inflate the denominator, which pushed
 # genuinely relevant chunks below the score threshold.
@@ -98,10 +98,41 @@ _SUFFIXES = tuple(
 # the single most common paid job in this corpus, so the pair is worth naming.
 _SEARCH_PREFIXES = ("свад",)
 
+# Brands the owner types in Russian while the lessons spell them in English.
+# The lesson 12_profile_packaging_instagram never writes the word in Cyrillic,
+# so the question about packing a profile shared no word with the single file
+# that answers it and arrived fourth. Morphology cannot repair that - the two
+# spellings have no letters in common. Each spelling is folded into one
+# canonical form before stemming, so Instagram and the Russian forms meet.
+_BRAND_ALIASES = {
+    "instagram": "инстаграм",
+    "insta": "инстаграм",
+    "инста": "инстаграм",
+    "telegram": "телеграм",
+    "tg": "телеграм",
+    "тг": "телеграм",
+    "reels": "рилс",
+    "reel": "рилс",
+    "рилз": "рилс",
+    "stories": "сторис",
+    "story": "сторис",
+    "сториз": "сторис",
+    "tiktok": "тикток",
+    "pinterest": "пинтерест",
+    "чатгпт": "chatgpt",
+    "гпт": "chatgpt",
+}
+
+
+def _normalise(word: str) -> str:
+    """Lowercase, unify the two spellings of e, and fold brand names."""
+    lowered = (word or "").strip().lower().replace("\\u0451", "е")
+    return _BRAND_ALIASES.get(lowered, lowered)
+
 
 def stem(word: str) -> str:
     """Reduce a Russian word to a comparable stem."""
-    normalised = word.lower().replace("\u0451", "е")
+    normalised = _normalise(word)
     for _ in range(_MAX_STRIPS):
         for suffix in _SUFFIXES:
             if normalised.endswith(suffix) and len(normalised) - len(suffix) >= MIN_STEM_LENGTH:
@@ -120,7 +151,7 @@ def search_stem(word: str) -> str:
     hard sign is dropped because ``"статья"*`` and ``"статьи"*`` have to share
     one prefix in FTS5.
     """
-    normalised = (word or "").strip().lower().replace("\u0451", "е")
+    normalised = _normalise(word)
     if len(normalised) <= MIN_STEM_LENGTH:
         return normalised
     for prefix in _SEARCH_PREFIXES:
@@ -133,7 +164,7 @@ def tokenize(text: str) -> set[str]:
     """Split text into comparable stems, dropping stopwords."""
     tokens: set[str] = set()
     for raw in _WORD.findall(text or ""):
-        lowered = raw.lower().replace("\u0451", "е")
+        lowered = _normalise(raw)
         if len(lowered) < 2 or lowered in _STOPWORDS:
             continue
         tokens.add(stem(lowered))
