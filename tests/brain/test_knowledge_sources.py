@@ -150,3 +150,27 @@ def test_strict_layer_is_opt_in(monkeypatch):
     assert layer_is_strict() is False
     monkeypatch.setenv("BRAIN_LAYER_STRICT", "true")
     assert layer_is_strict() is True
+
+
+# --- brands the lessons spell in English ------------------------------------
+
+
+def test_english_brand_names_meet_the_russian_words_the_owner_types():
+    """Уроки пишут Instagram, а владелец спрашивает «в инстаграме»."""
+    assert stem("Instagram") == stem("инстаграме") == stem("инстаграм")
+    assert stem("Instagram") == stem("инста")
+    assert search_stem("Instagram") == search_stem("инстаграме")
+    assert stem("Reels") == stem("рилсы")
+    assert stem("Stories") == stem("сторис")
+    assert stem("Telegram") == stem("телеграме") == stem("тг")
+    assert stem("ChatGPT") == stem("чатгпт")
+
+
+def test_brand_folding_is_a_named_table_not_transliteration():
+    """Склеивать похожие слова нельзя: «инструменты» — не «инстаграм»."""
+    from src.brain.knowledge.text_match import tokenize
+
+    assert stem("инструменты") != stem("инстаграм")
+    assert "инстагр" in tokenize("как упаковать профиль в Instagram")
+    assert "инструмент" in tokenize("инструменты фотографа")
+    assert search_stem("свадьба") == search_stem("свадебная")
