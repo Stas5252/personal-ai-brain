@@ -278,7 +278,7 @@ class ProfileEngine:
             if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий", "свадебный", "семейный"]:
                 extracted_data["identity"] = m_name.group(1).strip()
         if not extracted_data.get("city"):
-            m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)", text)
+            m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[а-яёА-ЯЁ]+)*)", text, re.IGNORECASE)
             if m_city:
                 c_val = m_city.group(1).strip()
                 c_low = c_val.lower()
@@ -286,6 +286,8 @@ class ProfileEngine:
                     extracted_data["city"] = "Москва"
                 elif "питер" in c_low or "петербург" in c_low:
                     extracted_data["city"] = "Санкт-Петербург"
+                elif "ростов" in c_low:
+                    extracted_data["city"] = "Ростов-на-Дону"
                 elif "самар" in c_low:
                     extracted_data["city"] = "Самара"
                 elif "казан" in c_low:
@@ -296,7 +298,11 @@ class ProfileEngine:
                     extracted_data["city"] = "Новосибирск"
                 elif "екатеринбург" in c_low:
                     extracted_data["city"] = "Екатеринбург"
-                elif c_val.endswith("е") or c_val.endswith("ы"):
+                elif "тюмен" in c_low:
+                    extracted_data["city"] = "Тюмень"
+                elif "перм" in c_low:
+                    extracted_data["city"] = "Пермь"
+                elif c_val.endswith(("е", "ы")):
                     extracted_data["city"] = c_val[:-1] + "а"
                 else:
                     extracted_data["city"] = c_val

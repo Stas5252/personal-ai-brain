@@ -73,8 +73,65 @@ class AudioExtractor(BaseExtractor):
                             'source': 'sidecar' if self.allow_sidecar and sidecar.is_file() else 'whisper'},
             )
         except Exception as exc:
+            if self._has_gemini_key():
+                try:
+                    return self._transcribe_with_gemini(path, source_id)
+                except Exception:
+                    pass
             return ExtractionResult(source_id=source_id, success=False,
                                     error_message=f'Transcription failed ({type(exc).__name__}).')
+
+    def _has_gemini_key(self) -> bool:
+        from src.brain.config import GEMINI_API_KEY
+        return bool(GEMINI_API_KEY and GEMINI_API_KEY.strip())
+
+    def _transcribe_with_gemini(self, audio_path: Path, source_id: str) -> ExtractionResult:
+        import base64
+        import urllib.request
+        from src.brain.config import GEMINI_API_KEY, DEFAULT_MODEL
+
+        mime_map = {
+            '.mp3': 'audio/mp3',
+            '.wav': 'audio/wav',
+            '.ogg': 'audio/ogg',
+            '.m4a': 'audio/m4a',
+            '.flac': 'audio/flac',
+        }
+        mime = mime_map.get(audio_path.suffix.lower(), 'audio/ogg')
+        data_b64 = base64.b64encode(audio_path.read_bytes()).decode('ascii')
+
+        url = f'https://generativelanguage.googleapis.com/v1beta/models/{DEFAULT_MODEL}:generateContent?key={GEMINI_API_KEY}'
+        payload = {
+            'contents': [{
+                'parts': [
+                    {'text': 'Транскрибируй эту голосовую аудиозапись дословно на русском языке. Верни только распознанный текст без каких-либо комментариев.'},
+                    {'inlineData': {'mimeType': mime, 'data': data_b64}}
+                ]
+            }]
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode('utf-8'),
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read().decode('utf-8'))
+            text = body['candidates'][0]['content']['parts'][0]['text'].strip()
+
+        if not text:
+            raise ValueError('Empty transcription returned by Gemini.')
+
+        element = ExtractedElement(
+            element_type='transcript_segment', content=text,
+            start_time=0.0, end_time=0.0,
+            metadata={'language': 'ru', 'confidence': 0.95},
+        )
+        return ExtractionResult(
+            source_id=source_id, success=True, elements=[element],
+            raw_text=text, duration_seconds=0.0,
+            media_info={'language': 'ru', 'segments_count': 1, 'source': 'gemini_multimodal'},
+        )
 
     def _load_sidecar_transcript(self, path: Path) -> Tuple[List[AudioSegment], str]:
         data = json.loads(path.read_text(encoding='utf-8'))
