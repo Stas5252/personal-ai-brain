@@ -18,7 +18,7 @@ Mock-тесты и placeholder-секреты не подтверждают `Pro
 1. Создайте `.env` из `.env.example`.
 2. Сгенерируйте разные случайные значения для `BRAIN_API_KEY` и `WEBUI_SECRET_KEY`.
 3. Укажите реальный `TELEGRAM_OWNER_ID`: бот не регистрирует первого отправителя автоматически.
-4. Укажите каталог корпуса в `BRAIN_CORPUS_HOST_DIR`. Он монтируется только для чтения и не попадает в image.
+4. Укажите каталог корпуса в `BRAIN_CORPUS_HOST_DIR`. Он монтируется только в bootstrap/worker, только для чтения и не попадает в image.
 5. Оставьте публичные порты на `127.0.0.1`, если нет TLS reverse proxy и firewall.
 
 Проверка конфигурации без запуска:
@@ -51,7 +51,7 @@ curl --fail --silent --show-error \
   http://127.0.0.1:8000/v1/models
 ```
 
-`/health/live` подтверждает работу процесса. Только успешный `/health/ready` подтверждает готовность зависимостей.
+`/health/live` подтверждает работу процесса. `/health/ready` не вызывает Gemini и возвращает 2xx только если доступны SQLite/storage, Chroma соответствует embedding spec, все пять verified-core источников завершены без failed/active jobs и heartbeat worker свежий.
 
 ## Наблюдение
 
@@ -66,7 +66,7 @@ docker compose logs --since=30m telegram
 
 - readiness возвращает не-2xx;
 - повторные ошибки SQLite lock после `BRAIN_SQLITE_BUSY_TIMEOUT_MS`;
-- worker регулярно возвращает просроченные lease;
+- worker heartbeat старше `BRAIN_WORKER_HEARTBEAT_MAX_AGE_SECONDS` или worker регулярно возвращает просроченные lease;
 - изменилась версия/размерность embeddings и требуется переиндексация;
 - Telegram повторяет update либо не может доставить ответ;
 - grounding не находит источник там, где он ожидается, или источник пытается задавать инструкции модели.
@@ -125,6 +125,49 @@ docker compose start brain_api knowledge_worker telegram
 
 После восстановления обязательно проверьте `health/ready`, профиль, CRM, поиск знаний и один Telegram-сценарий. Не запускайте API и knowledge worker параллельно во время распаковки.
 
+## Controlled vector reindex
+
+Используйте только при смене embedding provider/model/dimension или повреждении Chroma. Команда строит новый индекс из SQLite `knowledge_chunks`, проверяет точное число векторов, атомарно меняет каталоги и сохраняет предыдущий индекс рядом как rollback target. SQLite, FTS и originals не изменяются.
+
+1. Сделайте полный backup `brain-data` и зафиксируйте текущие commit/image digest.
+2. Остановите все процессы, которые читают или пишут Chroma:
+
+```bash
+docker compose stop telegram brain_api knowledge_worker
+```
+
+3. Проверьте план без генерации embeddings:
+
+```bash
+docker compose run --rm --no-deps knowledge_worker \
+  python /app/scripts/reindex_vectors.py plan
+```
+
+4. Выполните явный controlled swap. Для `EMBEDDING_PROVIDER_TYPE=gemini` это live-операция; для `chroma_onnx` и `hash_fallback` внешняя модель не вызывается.
+
+```bash
+docker compose run --rm --no-deps knowledge_worker \
+  python /app/scripts/reindex_vectors.py apply --confirm REINDEX
+```
+
+5. Запустите worker/API, дождитесь readiness и проверьте несколько известных запросов:
+
+```bash
+docker compose up -d knowledge_worker brain_api
+docker compose ps
+```
+
+Если проверка не прошла, снова остановите процессы и восстановите предыдущий каталог из manifest:
+
+```bash
+docker compose stop telegram brain_api knowledge_worker
+docker compose run --rm --no-deps knowledge_worker \
+  python /app/scripts/reindex_vectors.py rollback --confirm ROLLBACK
+docker compose up -d knowledge_worker brain_api
+```
+
+Не удаляйте `vector_db.backup-*` до завершения staging/live проверки. После подтверждения оставьте один последний совместимый backup, остальные удалите вручную только после проверки полного `brain-data` архива.
+
 ## Обновление и миграции
 
 1. Создайте резервную копию.
@@ -136,7 +179,7 @@ docker compose start brain_api knowledge_worker telegram
 7. Запустите worker, затем Telegram.
 8. Выполните staging/live checklist.
 
-При смене embedding provider, модели или размерности не смешивайте векторы старого и нового пространства. Выполните контролируемую переиндексацию из исходных документов.
+При смене embedding provider, модели или размерности не смешивайте векторы старого и нового пространства. Выполните controlled reindex выше.
 
 ## Откат
 
@@ -157,7 +200,7 @@ docker compose start brain_api knowledge_worker telegram
 - UTC-время и commit SHA;
 - `docker compose ps`;
 - последние логи затронутого сервиса без секретов и пользовательского контента;
-- HTTP-код readiness;
+- HTTP-код readiness и degraded component;
 - число повторных попыток/lease worker;
 - факт успешной или неуспешной доставки Telegram.
 
