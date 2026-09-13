@@ -254,6 +254,34 @@ class GuidedActionService:
         elif action_id=="sales.proposal": data=self.promo.build_campaign_offer(text,profile,use_llm)
         elif action_id=="shoot.moodboard":
             location=self._vision(brain,image_path,"Опиши свет, цвета, фактуры и ограничения локации.") if image_path else ""; data=brain.shooting_engine.generate_moodboard_card(text or "Концепция по локации",location=location,use_llm=use_llm)
+            try:
+                from src.brain.engines.visual_card_renderer import render_moodboard_card
+                from src.brain.config import DERIVED_DIR
+                import uuid
+                card_file = DERIVED_DIR / f"moodboard_{uuid.uuid4().hex[:8]}.jpg"
+                styling = data.get("styling") or []
+                props = data.get("props") or []
+                shots = data.get("shot_list") or []
+                outfit_sections = [
+                    {"role": "Образ для Нее", "items": styling[:4], "tip": "Натуральные фактуры и комфорт"},
+                    {"role": "Образ для Него / Семьи", "items": styling[4:8] or ["Базовые спокойные тона в тон палитре"], "tip": "Без мелкой клетки и крупных лого"},
+                    {"role": "Реквизит и Детали", "items": props[:4] or ["Живые предметы для непринужденного кадра"], "tip": "Фактура и атмосфера"},
+                    {"role": "Ключевые Кадры", "items": [s.get("plan", "") + ": " + ", ".join(s.get("key_shots", [])[:2]) for s in shots[:3]] or ["Портреты и живые эмоции"], "tip": "Естественный свет и контакт"}
+                ]
+                render_moodboard_card(
+                    title=data.get("title") or "Мудборд съемки",
+                    subtitle=data.get("concept") or "Индивидуальный гид по стилю и свету",
+                    photographer_name=profile.identity or "Фотограф",
+                    city=profile.city or "",
+                    palette=data.get("color_palette") or [],
+                    outfit_sections=outfit_sections,
+                    location_note=str(data.get("location") or ""),
+                    output_path=str(card_file)
+                )
+                if card_file.exists():
+                    data["image_path"] = str(card_file)
+            except Exception:
+                pass
         elif action_id=="shoot.audit": data=brain.shooting_engine.audit_profile_and_grid(image_path or text,profile=profile,use_llm=use_llm)
         elif action_id=="shoot.critique":
             if not image_path: raise MissingActionInput(action.prompt)
