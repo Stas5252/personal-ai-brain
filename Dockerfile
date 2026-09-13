@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.12.11-slim-bookworm
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -9,13 +9,13 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential ffmpeg libgomp1 libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
-COPY requirements.txt ./
-RUN python -m pip install --upgrade pip && pip install -r requirements.txt
+COPY requirements.lock ./
+RUN python -m pip install --no-deps -r requirements.lock && python -m pip check
 COPY . .
 RUN useradd --create-home --uid 10001 brain \
     && mkdir -p /app/data/uploads /app/data/storage /app/data/vector_db \
     && chown -R brain:brain /app \
-    && chmod +x /app/scripts/docker_entrypoint.sh /app/scripts/validate_environment.py
+    && chmod +x /app/scripts/docker_entrypoint.sh /app/scripts/validate_environment.py /app/scripts/reindex_vectors.py
 USER brain
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
