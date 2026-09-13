@@ -30,18 +30,18 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__
     )
-    parser.add_argument('--name', default='Виктория Ларионова', help="Photographer's name")
-    parser.add_argument('--city', default='Самара', help='City where you shoot')
-    parser.add_argument('--niche', default='Кинематографичный естественный портрет и семейные истории', help='Photography niche')
-    parser.add_argument('--services', nargs='*', default=['Индивидуальная кинематографичная съёмка', 'Семейная фотосессия', 'Love Story на закате Волги', 'Экспресс-съёмка'])
-    parser.add_argument('--genres', nargs='*', default=['Женский портрет', 'Семейная съёмка', 'Love Story', 'Индивидуальная фотосессия'])
-    parser.add_argument('--price-light', default='5000')
-    parser.add_argument('--price-optimal', default='8500')
-    parser.add_argument('--price-premium', default='15000')
-    parser.add_argument('--tone', default='Теплый, кинематографичный, заботливый, без клише и навязчивости')
-    parser.add_argument('--audience', default='Девушки и семьи 25-42 лет, ценящие искренние эмоции, естественный свет и спокойную эстетику')
-    parser.add_argument('--goals', nargs='*', default=['Плотная запись на месяц вперед', 'Чек от 10 000 ₽', 'Узнаваемый визуальный почерк в Самаре'])
-    parser.add_argument('--forbidden-words', nargs='*', default=['красоточка', 'волшебство', 'раскрою женственность', 'девочки', 'скидочка', 'налетай', 'уникальный прайс'])
+    parser.add_argument('--name', default='', help="Photographer's name")
+    parser.add_argument('--city', default='', help='City where you shoot')
+    parser.add_argument('--niche', default='', help='Photography niche')
+    parser.add_argument('--services', nargs='*', default=[])
+    parser.add_argument('--genres', nargs='*', default=[])
+    parser.add_argument('--price-light', default='')
+    parser.add_argument('--price-optimal', default='')
+    parser.add_argument('--price-premium', default='')
+    parser.add_argument('--tone', default='Теплый, искренний, без клише')
+    parser.add_argument('--audience', default='')
+    parser.add_argument('--goals', nargs='*', default=[])
+    parser.add_argument('--forbidden-words', nargs='*', default=[])
     args = parser.parse_args()
 
     try:
@@ -53,7 +53,7 @@ def main():
 
     engine = ProfileEngine()
     profile = engine.get_profile()
-    profile.identity = args.name
+    if args.name: profile.identity = args.name
     if args.city: profile.city = args.city
     if args.niche: profile.niche = args.niche
     if args.services: profile.services = args.services
