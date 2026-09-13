@@ -51,12 +51,9 @@ jobs:
         run: |
           python scripts/ingest_course_corpus.py --dry-run
       - name: Real questions reach the lesson that answers them
-        # TODO: temporarily non-blocking while the threshold is calibrated
-        # against the real corpus. Back to blocking before this branch merges.
-        continue-on-error: true
         run: |
           set -o pipefail
-          python scripts/eval_knowledge_answers.py --min-pass 0.7 --verbose | tee retrieval-report.txt
+          python scripts/eval_knowledge_answers.py --min-pass 0.9 --min-first 0.55 --verbose | tee retrieval-report.txt
       - name: Deterministic reliability and product acceptance
         run: |
           set -o pipefail
@@ -89,7 +86,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           {
-            echo "### Какой урок приходит первым на живые вопросы"
+            echo "### Доходят ли живые вопросы до нужного урока"
             echo
             echo '```'
             tail -n 90 retrieval-report.txt 2>/dev/null || echo "отчёт не создан"

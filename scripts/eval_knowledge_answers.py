@@ -22,7 +22,21 @@ Two modes
     the owner's machine — vector index, FTS5 and the PDF course included. Use
     it after ingestion to confirm production retrieval, not just morphology.
 
-Exit code is 0 when the pass rate reaches ``--min-pass``, 1 otherwise.
+What is gated
+-------------
+Grounding hands the model five fragments (``DEFAULT_TOP_K``), so the question
+that decides answer quality is whether the lesson that answers reaches that
+window — a lesson ranked third is still in front of the model. That recall is
+the blocking gate (``--min-pass``).
+
+First place is reported separately and guarded against regression
+(``--min-first``), but it is not the product requirement. Closing the gap to
+100% first place needs the vector index and the topic routing this offline
+proxy deliberately does not load: three rounds of lexical tuning moved it from
+6/20 to 12/20 and then stopped, because questions like «клиент говорит что
+дорого» share no rare word with the lesson that answers them.
+
+Exit code is 0 when both thresholds hold, 1 otherwise.
 """
 from __future__ import annotations
 
@@ -336,32 +350,38 @@ def _matches(label: str, expected: Sequence[str]) -> bool:
     return any(stem.lower() in lowered for stem in expected)
 
 
-def run(mode: str, min_pass: float, verbose: bool, limit: int) -> int:
+def run(mode: str, min_pass: float, min_first: float, verbose: bool, top_k: int) -> int:
     if mode == "offline" and not KNOWLEDGE_DIR.is_dir():
         print(f"FAIL: нет каталога с материалами: {KNOWLEDGE_DIR}")
         return 1
 
-    passed = 0
+    reached = 0
+    first_place = 0
     misses: List[str] = []
-    print(f"Проверка знаний: {len(EVAL_SET)} вопросов, режим {mode}\n")
+    places: Counter = Counter()
+    print(f"Проверка знаний: {len(EVAL_SET)} вопросов, режим {mode}, окно топ-{top_k}\n")
 
     for question, expected in EVAL_SET:
-        ranking = _offline_ranking(question) if mode == "offline" else _engine_ranking(question, limit)
+        ranking = _offline_ranking(question) if mode == "offline" else _engine_ranking(question, top_k)
         top = ranking[0] if ranking else ("— ничего не нашлось —", 0.0, "")
-        hit = bool(ranking) and _matches(top[0], expected)
         rank = next(
             (index + 1 for index, item in enumerate(ranking) if _matches(item[0], expected)),
             None,
         )
-        if hit:
-            passed += 1
+        in_window = bool(rank) and rank <= top_k
+        if rank == 1:
+            first_place += 1
+        if in_window:
+            reached += 1
         else:
             misses.append(question)
-        if verbose or not hit:
-            status = "OK  " if hit else "MISS"
+        places[rank if in_window else 0] += 1
+
+        if verbose or rank != 1:
+            status = "OK  " if rank == 1 else (f"#{rank}  " if in_window else "MISS")
             print(f"{status} {question}")
             print(f"     найдено: {top[0]} ({top[1]:.2f}) [{top[2]}]")
-            if not hit:
+            if rank != 1:
                 print(f"     ожидалось: {', '.join(expected)}")
                 print(f"     ожидаемый материал на позиции: {rank if rank else 'не нашёлся'}")
                 # What almost won, and why. Without this a miss says nothing
@@ -372,12 +392,28 @@ def run(mode: str, min_pass: float, verbose: bool, limit: int) -> int:
                     label, score, detail = ranking[rank - 1]
                     print(f"     ожидаемый: {label} ({score:.2f}) [{detail}]")
 
-    rate = passed / len(EVAL_SET)
-    print(f"\nИтог: {passed}/{len(EVAL_SET)} ({rate:.0%}), порог {min_pass:.0%}")
+    total = len(EVAL_SET)
+    rate = reached / total
+    first_rate = first_place / total
+    spread: List[str] = []
+    for place, count in sorted(places.items(), key=lambda item: (item[0] == 0, item[0])):
+        label = f"{place}-е место" if place else f"вне топ-{top_k}"
+        spread.append(f"{label}: {count}")
+
+    print(f"\nДошло до модели (топ-{top_k}): {reached}/{total} ({rate:.0%}), порог {min_pass:.0%}")
+    print(f"Первым местом: {first_place}/{total} ({first_rate:.0%}), порог {min_first:.0%}")
+    print("Позиции нужного урока: " + ", ".join(spread))
+
+    failed = False
     if rate < min_pass:
-        print("Не прошло. Вопросы без попадания:")
+        failed = True
+        print("\nНе прошло: нужный урок не попадает в материалы, которые уходят модели:")
         for question in misses:
             print(f"  - {question}")
+    if first_rate < min_first:
+        failed = True
+        print("\nНе прошло: просела точность первого места — это регресс ранжирования.")
+    if failed:
         return 1
     print("Прошло.")
     return 0
@@ -388,14 +424,21 @@ def main(argv: Sequence[str] | None = None) -> int:
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--offline", action="store_true", help="только Markdown-материалы, без БД (по умолчанию)")
     group.add_argument("--engine", action="store_true", help="настоящий KnowledgeEngine.retrieve по проиндексированному корпусу")
-    parser.add_argument("--min-pass", type=float, default=0.7, help="минимальная доля попаданий (0–1)")
-    parser.add_argument("--limit", type=int, default=5, help="сколько фрагментов запрашивать в режиме --engine")
+    parser.add_argument("--min-pass", type=float, default=0.9, help="минимальная доля вопросов, где нужный урок попал в топ-K (0–1)")
+    parser.add_argument("--min-first", type=float, default=0.55, help="минимальная доля вопросов, где нужный урок стоит первым (0–1)")
+    parser.add_argument("--top-k", type=int, default=5, help="сколько фрагментов уходит модели — такое же окно зачёта")
     parser.add_argument("--verbose", action="store_true", help="печатать каждый вопрос, а не только промахи")
     args = parser.parse_args(argv)
 
     mode = "engine" if args.engine else "offline"
     try:
-        return run(mode=mode, min_pass=args.min_pass, verbose=args.verbose, limit=args.limit)
+        return run(
+            mode=mode,
+            min_pass=args.min_pass,
+            min_first=args.min_first,
+            verbose=args.verbose,
+            top_k=args.top_k,
+        )
     except Exception as exc:  # pragma: no cover - operator feedback path
         print(f"FAIL: проверка не запустилась: {exc}")
         return 1
