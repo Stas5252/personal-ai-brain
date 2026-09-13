@@ -2,7 +2,6 @@
 """Run the sole production ingestion writer with lock and process heartbeat."""
 from __future__ import annotations
 
-from src.brain.services.file_lock import acquire_exclusive_lock
 import json
 import os
 import sys
@@ -13,6 +12,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from src.brain.services.file_lock import acquire_exclusive_lock
 
 
 class WorkerHeartbeat:

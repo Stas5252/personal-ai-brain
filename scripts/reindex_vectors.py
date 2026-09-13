@@ -8,7 +8,6 @@ previous vector directory as a rollback target.
 from __future__ import annotations
 
 import argparse
-from src.brain.services.file_lock import acquire_exclusive_lock
 import gc
 import json
 import os
@@ -21,6 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from src.brain.services.file_lock import acquire_exclusive_lock
 
 MANIFEST_FILENAME = ".vector-reindex-manifest.json"
 

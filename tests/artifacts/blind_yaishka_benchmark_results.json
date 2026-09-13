@@ -88,7 +88,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain опирается на подтверждённые данные из базы проектов, а не советует врать подписчикам.",
-      "latency_sec": 0.0
+      "latency_sec": 0.015000000013969839
     },
     {
       "task_id": "BLIND-CONT-04",
@@ -564,7 +564,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain защищает индивидуальный тон фотографа от дешёвого маркетингового сленга.",
-      "latency_sec": 0.0159999999741558
+      "latency_sec": 0.0
     },
     {
       "task_id": "BLIND-PERS-03",
@@ -592,7 +592,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain оперирует реальными сущностями из CRM-базы пользователя.",
-      "latency_sec": 0.015000000013969839
+      "latency_sec": 0.0
     },
     {
       "task_id": "BLIND-PERS-05",
@@ -620,7 +620,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain координирует сложный сквозной сценарий из 8 связанных шагов.",
-      "latency_sec": 0.01600000000325963
+      "latency_sec": 0.015000000013969839
     },
     {
       "task_id": "BLIND-COMP-02",
@@ -662,7 +662,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain защищает от несанкционированных действий от лица фотографа.",
-      "latency_sec": 0.030999999988125637
+      "latency_sec": 0.031000000017229468
     },
     {
       "task_id": "BLIND-COMP-05",
@@ -690,7 +690,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain хранит долговременные знания о пользователе между сессиями.",
-      "latency_sec": 0.01600000000325963
+      "latency_sec": 0.015000000013969839
     },
     {
       "task_id": "BLIND-MEM-02",
@@ -732,7 +732,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain адаптируется к вкусу и ограничениям конкретного фотографа.",
-      "latency_sec": 0.7190000000118744
+      "latency_sec": 0.11000000001513399
     },
     {
       "task_id": "BLIND-MEM-05",
@@ -802,7 +802,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain реализует строгий стейт-машинный durable outbox с защитой от спама при retry.",
-      "latency_sec": 0.015000000013969839
+      "latency_sec": 0.0159999999741558
     },
     {
       "task_id": "BLIND-HONEST-05",
@@ -816,7 +816,7 @@
       "has_unconfirmed_facts": false,
       "brain_preferred": true,
       "preference_rationale": "Brain гарантирует изоляцию single-writer и целостность базы знаний при рестартах.",
-      "latency_sec": 0.030999999988125637
+      "latency_sec": 0.031000000017229468
     }
   ]
 }
