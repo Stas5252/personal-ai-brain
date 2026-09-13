@@ -196,7 +196,7 @@ class Bot:
             p = profile.get_profile()
             if p.identity and p.niche:
                 self.api.send(chat_id, (
-                    f'Привет, {p.identity}! Твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. 📸\n\n'
+                    f'Привет, {p.identity}! Твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. \ud83d\udcf8\n\n'
                     f'Твой профиль: {p.niche} ({p.city or "город не указан"}).\n'
                     'Выбирай раздел ниже или просто напиши голосовое!\n\n'
                     '📋 Команды: /profile | /brief | /library | /uroki | /help | /reset'
@@ -204,7 +204,7 @@ class Bot:
             else:
                 self.state.put(session_key, 'freeform')
                 self.api.send(chat_id, (
-                    'Привет! Я твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. 📸\n'
+                    'Привет! Я твой личный ИИ-напарник по фотобизнесу на базе ChatGPT. \ud83d\udcf8\n'
                     'Давай познакомимся — напиши или отправь голосовое:\n\n'
                     '• Как тебя зовут?\n• Город?\n• Ниша и средний чек?\n• Главная цель?'
                 ), keyboard=KEYBOARD_MAIN)
