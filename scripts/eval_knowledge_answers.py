@@ -127,10 +127,19 @@ EVAL_SET: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
 )
 
 
+# How much of the score comes from the single best passage, and how much from
+# the lesson as a whole. A passage can cover half a question by accident; the
+# lesson that actually answers it covers the whole question somewhere.
+PASSAGE_WEIGHT = 0.7
+DOCUMENT_WEIGHT = 0.3
+TITLE_WEIGHT = 0.5
+
+
 class _Lesson(NamedTuple):
     stem: str
     title_tokens: FrozenSet[str]
     passage_tokens: Tuple[FrozenSet[str], ...]
+    all_tokens: FrozenSet[str]
 
 
 _CORPUS: List[_Lesson] = []
@@ -173,13 +182,19 @@ def _corpus() -> List[_Lesson]:
     lessons: List[_Lesson] = []
     for path in sorted(KNOWLEDGE_DIR.glob("*.md")):
         text = path.read_text(encoding="utf-8", errors="replace")
+        title_tokens = frozenset(tokenize(path.stem.replace("_", " ")))
+        passage_tokens = tuple(
+            frozenset(tokenize(passage)) for passage in _passages(text)
+        )
+        all_tokens = (
+            title_tokens.union(*passage_tokens) if passage_tokens else title_tokens
+        )
         lessons.append(
             _Lesson(
                 stem=path.stem,
-                title_tokens=frozenset(tokenize(path.stem.replace("_", " "))),
-                passage_tokens=tuple(
-                    frozenset(tokenize(passage)) for passage in _passages(text)
-                ),
+                title_tokens=title_tokens,
+                passage_tokens=passage_tokens,
+                all_tokens=all_tokens,
             )
         )
     _CORPUS = lessons
@@ -209,11 +224,44 @@ def _idf() -> Dict[str, float]:
     }
 
 
-def _offline_ranking(question: str) -> List[Tuple[str, float]]:
-    """Rank lessons by their best passage, weighted by word rarity."""
+def _score(
+    lesson: _Lesson,
+    query: FrozenSet[str],
+    weights: Dict[str, float],
+    total: float,
+) -> Tuple[float, str]:
+    """Score one lesson and explain the score, so a miss can be debugged."""
+    best = 0.0
+    best_words: FrozenSet[str] = frozenset()
+    for tokens in lesson.passage_tokens:
+        matched = query & tokens
+        if not matched:
+            continue
+        coverage = sum(weights[token] for token in matched) / total
+        if coverage > best:
+            best, best_words = coverage, frozenset(matched)
+
+    in_file = query & lesson.all_tokens
+    document = sum(weights[token] for token in in_file) / total
+    # The title is material too: «Ценообразование» answers a pricing question
+    # even when no passage repeats the word.
+    in_title = query & lesson.title_tokens
+    title = sum(weights[token] for token in in_title) / total
+
+    score = min(
+        1.0,
+        PASSAGE_WEIGHT * best + DOCUMENT_WEIGHT * document + TITLE_WEIGHT * title,
+    )
+    words = ", ".join(sorted(best_words)) or "—"
+    detail = f"проход {best:.2f}, файл {document:.2f}, слова: {words}"
+    return score, detail
+
+
+def _offline_ranking(question: str) -> List[Tuple[str, float, str]]:
+    """Rank lessons by word rarity: best passage first, whole lesson second."""
     from src.brain.knowledge.text_match import tokenize
 
-    query = tokenize(question)
+    query = frozenset(tokenize(question))
     if not query:
         return []
 
@@ -223,28 +271,19 @@ def _offline_ranking(question: str) -> List[Tuple[str, float]]:
     weights = {token: idf.get(token, unseen) for token in query}
     total = sum(weights.values()) or 1.0
 
-    ranked: Dict[str, float] = {}
+    ranked: List[Tuple[str, float, str]] = []
     for lesson in _corpus():
-        best = 0.0
-        for tokens in lesson.passage_tokens:
-            matched = query & tokens
-            if matched:
-                best = max(best, sum(weights[token] for token in matched) / total)
-        in_title = query & lesson.title_tokens
-        if in_title:
-            # The title is material too: «Ценообразование» answers a pricing
-            # question even when no passage repeats the word.
-            best = min(1.0, best + 0.5 * sum(weights[t] for t in in_title) / total)
-        if best > 0.0:
-            ranked[lesson.stem] = best
-    return sorted(ranked.items(), key=lambda item: (-item[1], item[0]))
+        score, detail = _score(lesson, query, weights, total)
+        if score > 0.0:
+            ranked.append((lesson.stem, score, detail))
+    return sorted(ranked, key=lambda item: (-item[1], item[0]))
 
 
-def _engine_ranking(question: str, limit: int) -> List[Tuple[str, float]]:
+def _engine_ranking(question: str, limit: int) -> List[Tuple[str, float, str]]:
     from src.brain.engines.knowledge_engine import KnowledgeEngine
 
     hits = KnowledgeEngine().retrieve(query=question, limit=limit)
-    ranking: List[Tuple[str, float]] = []
+    ranking: List[Tuple[str, float, str]] = []
     for hit in hits:
         chunk, score = hit[0], hit[1]
         meta = getattr(chunk, "metadata", None)
@@ -253,7 +292,7 @@ def _engine_ranking(question: str, limit: int) -> List[Tuple[str, float]]:
             for value in (getattr(meta, "title", ""), getattr(meta, "source_path", ""))
             if value
         )
-        ranking.append((label or "без названия", float(score)))
+        ranking.append((label or "без названия", float(score), "движок"))
     return ranking
 
 
@@ -273,7 +312,7 @@ def run(mode: str, min_pass: float, verbose: bool, limit: int) -> int:
 
     for question, expected in EVAL_SET:
         ranking = _offline_ranking(question) if mode == "offline" else _engine_ranking(question, limit)
-        top = ranking[0] if ranking else ("— ничего не нашлось —", 0.0)
+        top = ranking[0] if ranking else ("— ничего не нашлось —", 0.0, "")
         hit = bool(ranking) and _matches(top[0], expected)
         rank = next(
             (index + 1 for index, item in enumerate(ranking) if _matches(item[0], expected)),
@@ -286,10 +325,17 @@ def run(mode: str, min_pass: float, verbose: bool, limit: int) -> int:
         if verbose or not hit:
             status = "OK  " if hit else "MISS"
             print(f"{status} {question}")
-            print(f"     найдено: {top[0]} ({top[1]:.2f})")
+            print(f"     найдено: {top[0]} ({top[1]:.2f}) [{top[2]}]")
             if not hit:
                 print(f"     ожидалось: {', '.join(expected)}")
                 print(f"     ожидаемый материал на позиции: {rank if rank else 'не нашёлся'}")
+                # What almost won, and why. Without this a miss says nothing
+                # about whether the ranking or the material is at fault.
+                for label, score, detail in ranking[1:3]:
+                    print(f"     следом: {label} ({score:.2f}) [{detail}]")
+                if rank and rank > 3:
+                    label, score, detail = ranking[rank - 1]
+                    print(f"     ожидаемый: {label} ({score:.2f}) [{detail}]")
 
     rate = passed / len(EVAL_SET)
     print(f"\nИтог: {passed}/{len(EVAL_SET)} ({rate:.0%}), порог {min_pass:.0%}")
