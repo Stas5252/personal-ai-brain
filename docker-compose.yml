@@ -1,73 +1,88 @@
 name: personal-ai
 
-x-brain-common: &brain-common
+x-brain-image: &brain-image
   image: personal-ai-brain:local
   build:
     context: .
     dockerfile: Dockerfile
-  restart: unless-stopped
   init: true
   security_opt:
     - no-new-privileges:true
   cap_drop:
     - ALL
-  environment: &brain-environment
-    GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
-    BRAIN_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
-    BRAIN_DEFAULT_MODEL: ${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
-    BRAIN_FALLBACK_MODELS: ${BRAIN_FALLBACK_MODELS:-gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest}
-    UPSTREAM_LLM_BASE_URL: ${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
-    EMBEDDING_PROVIDER_TYPE: ${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
-    MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
-    BRAIN_CORPUS_DIR: /app/corpus
-    CORPUS_MAX_FILE_SIZE_BYTES: ${CORPUS_MAX_FILE_SIZE_BYTES:-67108864}
-    BRAIN_INGEST_CORPUS: ${BRAIN_INGEST_CORPUS:-true}
-    BRAIN_GROUNDING_ENABLED: ${BRAIN_GROUNDING_ENABLED:-true}
-    BRAIN_RATE_LIMIT_ENABLED: ${BRAIN_RATE_LIMIT_ENABLED:-true}
-    BRAIN_RATE_LIMIT_REQUESTS: ${BRAIN_RATE_LIMIT_REQUESTS:-120}
-    BRAIN_RATE_LIMIT_WINDOW_SECONDS: ${BRAIN_RATE_LIMIT_WINDOW_SECONDS:-60}
-    BRAIN_DATA_DIR: /app/data
-    BRAIN_DB_PATH: /app/data/brain.db
-    VECTOR_DB_DIR: /app/data/vector_db
-    BRAIN_INGESTION_WRITER_LOCK: /app/data/.ingestion-writer.lock
-    BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
-  volumes:
-    - brain-data:/app/data
-    - type: bind
-      source: "${BRAIN_CORPUS_HOST_DIR:-./материалы для ии}"
-      target: /app/corpus
-      read_only: true
+
+x-runtime-environment: &runtime-environment
+  BRAIN_DEFAULT_MODEL: ${BRAIN_DEFAULT_MODEL:-gemini-2.5-flash}
+  BRAIN_FALLBACK_MODELS: ${BRAIN_FALLBACK_MODELS:-gemini-2.5-flash,gemini-2.5-flash-lite,gemini-flash-latest}
+  UPSTREAM_LLM_BASE_URL: ${UPSTREAM_LLM_BASE_URL:-https://generativelanguage.googleapis.com/v1beta/openai}
+  EMBEDDING_PROVIDER_TYPE: ${EMBEDDING_PROVIDER_TYPE:-chroma_onnx}
+  MAX_FILE_SIZE_BYTES: ${MAX_FILE_SIZE_BYTES:-20971520}
+  CORPUS_MAX_FILE_SIZE_BYTES: ${CORPUS_MAX_FILE_SIZE_BYTES:-67108864}
+  BRAIN_GROUNDING_ENABLED: ${BRAIN_GROUNDING_ENABLED:-true}
+  BRAIN_DATA_DIR: /app/data
+  BRAIN_DB_PATH: /app/data/brain.db
+  BRAIN_STORAGE_DIR: /app/data/storage
+  VECTOR_DB_DIR: /app/data/vector_db
+  BRAIN_INGESTION_WRITER_LOCK: /app/data/.ingestion-writer.lock
+  BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
+
+x-data-volume: &data-volume
+  type: volume
+  source: brain-data
+  target: /app/data
+
+x-corpus-volume: &corpus-volume
+  type: bind
+  source: "${BRAIN_CORPUS_HOST_DIR:-./материалы для ии}"
+  target: /app/corpus
+  read_only: true
 
 services:
   db_migrate:
-    <<: *brain-common
+    <<: *brain-image
     restart: "no"
     container_name: brain-db-migrate
     command: ["python", "-c", "from src.brain.db import init_db; init_db()"]
     environment:
-      <<: *brain-environment
       BRAIN_SERVICE: migrate
+      BRAIN_DATA_DIR: /app/data
+      BRAIN_DB_PATH: /app/data/brain.db
+      BRAIN_STRICT_STARTUP: ${BRAIN_STRICT_STARTUP:-true}
+    volumes:
+      - *data-volume
 
   knowledge_bootstrap:
-    <<: *brain-common
+    <<: *brain-image
     restart: "no"
     container_name: brain-knowledge-bootstrap
     command: ["bash", "-lc", "python /app/scripts/seed_vetted_knowledge.py && if [ \"$${BRAIN_INGEST_CORPUS}\" = \"true\" ]; then python /app/scripts/ingest_course_corpus.py; fi"]
     environment:
-      <<: *brain-environment
+      <<: *runtime-environment
       BRAIN_SERVICE: bootstrap
+      BRAIN_CORPUS_DIR: /app/corpus
+      BRAIN_INGEST_CORPUS: ${BRAIN_INGEST_CORPUS:-true}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - *data-volume
+      - *corpus-volume
     depends_on:
       db_migrate:
         condition: service_completed_successfully
 
   knowledge_worker:
-    <<: *brain-common
+    <<: *brain-image
+    restart: unless-stopped
     container_name: brain-knowledge-worker
     command: ["python", "/app/scripts/run_knowledge_worker.py"]
     environment:
-      <<: *brain-environment
+      <<: *runtime-environment
       BRAIN_SERVICE: worker
+      BRAIN_CORPUS_DIR: /app/corpus
       BRAIN_INGEST_CORPUS: "false"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    volumes:
+      - *data-volume
+      - *corpus-volume
     depends_on:
       db_migrate:
         condition: service_completed_successfully
@@ -77,12 +92,20 @@ services:
       disable: true
 
   brain_api:
-    <<: *brain-common
+    <<: *brain-image
+    restart: unless-stopped
     container_name: brain-api
     environment:
-      <<: *brain-environment
+      <<: *runtime-environment
       BRAIN_SERVICE: api
       BRAIN_INGEST_CORPUS: "false"
+      BRAIN_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
+      BRAIN_RATE_LIMIT_ENABLED: ${BRAIN_RATE_LIMIT_ENABLED:-true}
+      BRAIN_RATE_LIMIT_REQUESTS: ${BRAIN_RATE_LIMIT_REQUESTS:-120}
+      BRAIN_RATE_LIMIT_WINDOW_SECONDS: ${BRAIN_RATE_LIMIT_WINDOW_SECONDS:-60}
+    volumes:
+      - *data-volume
     ports:
       - "${BRAIN_BIND_ADDRESS:-127.0.0.1}:${BRAIN_API_PORT:-8000}:8000"
     depends_on:
@@ -98,15 +121,20 @@ services:
       start_period: 60s
 
   telegram:
-    <<: *brain-common
+    <<: *brain-image
+    restart: unless-stopped
     container_name: brain-telegram
     command: ["python", "-m", "src.brain.channels.telegram_production_ingestion"]
     environment:
-      <<: *brain-environment
+      <<: *runtime-environment
       BRAIN_SERVICE: telegram
       BRAIN_INGEST_CORPUS: "false"
+      BRAIN_API_KEY: ${BRAIN_API_KEY:?Generate BRAIN_API_KEY in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?Set GEMINI_API_KEY in .env}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set TELEGRAM_BOT_TOKEN in .env}
       TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:?Set TELEGRAM_OWNER_ID in .env}
+    volumes:
+      - *data-volume
     depends_on:
       brain_api:
         condition: service_healthy
@@ -119,6 +147,8 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    cap_drop:
+      - ALL
     ports:
       - "${WEBUI_BIND_ADDRESS:-127.0.0.1}:${PORT:-8080}:8080"
     environment:

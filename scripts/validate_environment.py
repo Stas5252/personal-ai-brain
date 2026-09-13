@@ -29,11 +29,14 @@ def collect_errors(service: str, env: Mapping[str, str] | None = None) -> list[s
     gemini_key = values.get("GEMINI_API_KEY", "").strip()
     telegram_token = values.get("TELEGRAM_BOT_TOKEN", "").strip()
     telegram_owner = values.get("TELEGRAM_OWNER_ID", "").strip()
+    embedding_provider = values.get("EMBEDDING_PROVIDER_TYPE", "chroma_onnx").strip().lower()
 
-    if _unsafe_secret(api_key):
+    if service in {"api", "telegram"} and _unsafe_secret(api_key):
         errors.append("BRAIN_API_KEY must be a random secret of at least 32 characters")
-    if service in {"api", "telegram", "worker"} and not gemini_key:
+    if service in {"api", "telegram"} and not gemini_key:
         errors.append("GEMINI_API_KEY is required for live AI responses")
+    if service in {"worker", "bootstrap"} and embedding_provider == "gemini" and not gemini_key:
+        errors.append("GEMINI_API_KEY is required when Gemini embeddings are enabled")
     if service == "telegram":
         if len(telegram_token) < 20:
             errors.append("TELEGRAM_BOT_TOKEN is required for the Telegram service")
