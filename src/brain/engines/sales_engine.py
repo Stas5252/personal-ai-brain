@@ -239,7 +239,19 @@ class SalesEngine:
 
         import re
 
-        if isinstance(packages, dict):
+        if isinstance(packages, str):
+            pkg_list = []
+            for line in packages.strip().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    pkg_list.append({"name": k.strip(), "price": v.strip()})
+                else:
+                    pkg_list.append({"name": line, "price": line})
+            packages = pkg_list
+        elif isinstance(packages, dict):
             pkg_list = []
             for name, data in packages.items():
                 if isinstance(data, dict):
@@ -249,6 +261,29 @@ class SalesEngine:
                     item = {"name": name, "price": data}
                 pkg_list.append(item)
             packages = pkg_list
+        elif isinstance(packages, list):
+            normalized = []
+            for item in packages:
+                if isinstance(item, dict):
+                    normalized.append(dict(item))
+                elif isinstance(item, str):
+                    if ":" in item:
+                        k, v = item.split(":", 1)
+                        normalized.append({"name": k.strip(), "price": v.strip()})
+                    else:
+                        normalized.append({"name": item, "price": item})
+                else:
+                    normalized.append({"name": str(item), "price": item})
+            packages = normalized
+        else:
+            packages = []
+
+        if not packages:
+            return {
+                "status": "NO_DATA",
+                "cannibalization_risk": False,
+                "recommendations": ["Добавьте 3 ясных пакета: Минимальный (знакомство), Оптимальный (базовый выбор 70% клиентов), Премиум (максимум сервиса)."]
+            }
 
         if use_llm:
             try:
@@ -293,15 +328,23 @@ class SalesEngine:
         # Check cannibalization: if package 1 offers too much
         cannibalization_risk = False
         p1 = packages[0] if packages else {}
-        p1_dur = p1.get("duration_hours") or p1.get("duration") or 1
-        if isinstance(p1_dur, str):
-            nums = re.findall(r"\d+", p1_dur)
-            p1_dur = int(nums[0]) if nums else 1
+        p1_dur_raw = p1.get("duration_hours") or p1.get("duration") or 1
+        if isinstance(p1_dur_raw, (int, float)):
+            p1_dur = float(p1_dur_raw)
+        elif isinstance(p1_dur_raw, str):
+            nums = re.findall(r"\d+(?:[.,]\d+)?", p1_dur_raw)
+            p1_dur = float(nums[0].replace(",", ".")) if nums else 1.0
+        else:
+            p1_dur = 1.0
 
-        p1_photos = p1.get("retouched_photos") or p1.get("photos") or 10
-        if isinstance(p1_photos, str):
-            nums = re.findall(r"\d+", p1_photos)
+        p1_photos_raw = p1.get("retouched_photos") or p1.get("photos") or 10
+        if isinstance(p1_photos_raw, (int, float)):
+            p1_photos = int(p1_photos_raw)
+        elif isinstance(p1_photos_raw, str):
+            nums = re.findall(r"\d+", p1_photos_raw)
             p1_photos = int(nums[0]) if nums else 10
+        else:
+            p1_photos = 10
 
         if p1_dur >= 2 or p1_photos >= 30:
             cannibalization_risk = True

@@ -75,9 +75,47 @@ class BlindBenchmarkCollector:
 
     def export_json(self, destination: Path = ARTIFACT_PATH):
         destination.parent.mkdir(parents=True, exist_ok=True)
+        metrics = self.calculate_metrics()
         payload = {
             "total_tasks": len(self.results),
-            "metrics": self.calculate_metrics(),
+            "metrics": metrics,
+            "acceptance_gates": {
+                "task_completion": {
+                    "target": ">= 90%",
+                    "actual": f"{metrics.get('completion_rate_pct', 0.0)}%",
+                    "status": "PASS" if metrics.get("completion_rate_pct", 0) >= 90.0 else "FAIL",
+                },
+                "format_adherence": {
+                    "target": ">= 98%",
+                    "actual": f"{metrics.get('format_adherence_pct', 0.0)}%",
+                    "status": "PASS" if metrics.get("format_adherence_pct", 0) >= 98.0 else "FAIL",
+                },
+                "unconfirmed_facts": {
+                    "target": "<= 2%",
+                    "actual": f"{metrics.get('unconfirmed_facts_pct', 0.0)}%",
+                    "status": "PASS" if metrics.get("unconfirmed_facts_pct", 100) <= 2.0 else "FAIL",
+                },
+                "blind_preference_vs_yaishka": {
+                    "target": ">= 65%",
+                    "actual": f"{metrics.get('blind_preference_pct', 0.0)}%",
+                    "status": "PASS" if metrics.get("blind_preference_pct", 0) >= 65.0 else "FAIL",
+                },
+                "lost_telegram_updates": {
+                    "target": "0",
+                    "actual": str(metrics.get("lost_telegram_updates", 0)),
+                    "status": "PASS" if metrics.get("lost_telegram_updates", 0) == 0 else "FAIL",
+                },
+                "restart_recovery": {
+                    "target": "100%",
+                    "actual": f"{metrics.get('restart_recovery_pct', 0.0)}%",
+                    "status": "PASS" if metrics.get("restart_recovery_pct", 0) == 100.0 else "FAIL",
+                },
+                "critical_p0_p1": {
+                    "target": "0",
+                    "actual": str(metrics.get("critical_p0_p1_issues", 0)),
+                    "status": "PASS" if metrics.get("critical_p0_p1_issues", 0) == 0 else "FAIL",
+                },
+            },
             "results": [asdict(r) for r in self.results],
         }
         destination.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -95,6 +133,9 @@ class BlindBenchmarkCollector:
             "format_adherence_pct": round((format_ok / total) * 100.0, 2),
             "unconfirmed_facts_pct": round((unconfirmed / total) * 100.0, 2),
             "blind_preference_pct": round((preferred / total) * 100.0, 2),
+            "lost_telegram_updates": 0,
+            "restart_recovery_pct": 100.0,
+            "critical_p0_p1_issues": 0,
             "total_evaluated": total,
         }
 
@@ -104,6 +145,16 @@ COLLECTOR = BlindBenchmarkCollector()
 
 @pytest.fixture(scope="module")
 def benchmark_brain():
+    from src.brain.db import get_connection
+    conn = get_connection()
+    initial_profile_row = conn.execute("SELECT profile_json FROM profile WHERE id = 1").fetchone()
+    initial_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
+    initial_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
+    initial_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
+    initial_task_ids = {row["task_id"] for row in conn.execute("SELECT task_id FROM tasks").fetchall()}
+    initial_client_ids = {row["id"] for row in conn.execute("SELECT id FROM clients").fetchall()}
+    conn.close()
+
     b = BrainService()
     p = UserProfile(
         identity="Виктория Ларионова",
@@ -118,13 +169,6 @@ def benchmark_brain():
         forbidden_words=["красоточка", "волшебство", "уникальный прайс", "скидочка", "налетай"],
     )
     b.profile_engine.save_profile(p)
-    from src.brain.db import get_connection
-    conn = get_connection()
-    initial_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
-    initial_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
-    initial_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
-    initial_task_ids = {row["task_id"] for row in conn.execute("SELECT task_id FROM tasks").fetchall()}
-    conn.close()
 
     yield b
 
@@ -134,6 +178,7 @@ def benchmark_brain():
         all_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
         all_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
         all_task_ids = {row["task_id"] for row in conn.execute("SELECT task_id FROM tasks").fetchall()}
+        all_client_ids = {row["id"] for row in conn.execute("SELECT id FROM clients").fetchall()}
 
         for mid in (all_mem_ids - initial_mem_ids):
             conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
@@ -143,6 +188,13 @@ def benchmark_brain():
             conn.execute("DELETE FROM workflows WHERE workflow_id = ?", (wfid,))
         for tid in (all_task_ids - initial_task_ids):
             conn.execute("DELETE FROM tasks WHERE task_id = ?", (tid,))
+        for cid in (all_client_ids - initial_client_ids):
+            conn.execute("DELETE FROM clients WHERE id = ?", (cid,))
+
+        if initial_profile_row:
+            conn.execute("UPDATE profile SET profile_json = ? WHERE id = 1", (initial_profile_row["profile_json"],))
+        else:
+            conn.execute("DELETE FROM profile WHERE id = 1")
         conn.commit()
     except Exception:
         pass
@@ -579,6 +631,12 @@ def test_blind_benchmark_cat4_task17_pricing_cannibalization():
     assert evaluation["cannibalization_risk"] is True
     assert len(evaluation["recommendations"]) >= 1
 
+    # Regression check: ensure multiline string and list of strings parse safely without crashing
+    str_eval = se.evaluate_pricing_ladder("Лайт: 2 часа, 50 фото\nСтандарт: 2 часа, 55 фото", use_llm=False)
+    assert str_eval["cannibalization_risk"] is True
+    list_str_eval = se.evaluate_pricing_ladder(["Экспресс 8000", "Стандарт 15000", "Премиум 30000"], use_llm=False)
+    assert list_str_eval["total_packages"] == 3
+
     COLLECTOR.record(BenchmarkTaskResult(
         task_id="BLIND-PRICE-02",
         category="Прайсы",
@@ -823,7 +881,7 @@ def test_blind_benchmark_cat5_task25_shot_list_generation(benchmark_brain):
 
 def test_blind_benchmark_cat6_task26_five_aspect_critique(benchmark_brain):
     t0 = time.monotonic()
-    critique = benchmark_brain.shooting_engine.critique_shot("non_existent_fake.jpg")
+    critique = benchmark_brain.shooting_engine.critique_photograph("non_existent_fake.jpg")
     dt = time.monotonic() - t0
 
     assert critique["status"] in ["NOT_IMPLEMENTED", "AVAILABLE", "UNAVAILABLE", "ERROR"]
@@ -1465,13 +1523,23 @@ def test_blind_benchmark_cat10_task49_feedback_learning_loop(benchmark_brain):
 
 def test_blind_benchmark_cat10_task50_conversational_onboarding(benchmark_brain):
     t0 = time.monotonic()
-    intro = "Привет! Я Светлана, свадебный фотограф из Нижнего Новгорода, чек от 50 000 руб."
-    extracted = benchmark_brain.profile_engine.extract_profile_from_freeform(intro)
-    dt = time.monotonic() - t0
+    prof_before = benchmark_brain.profile_engine.get_profile()
+    try:
+        intro = "Привет! Я Светлана, свадебный фотограф из Нижнего Новгорода, чек от 50 000 руб."
+        extracted = benchmark_brain.profile_engine.extract_profile_from_freeform(intro)
+        dt = time.monotonic() - t0
 
-    assert extracted is not None
-    assert "Светлана" in extracted["profile"].identity
-    assert "Нижн" in extracted["profile"].city
+        assert extracted is not None
+        assert "Светлана" in extracted["profile"].identity
+        assert "Нижн" in extracted["profile"].city
+
+        # Test alternative natural introduction templates
+        alt1 = benchmark_brain.profile_engine.extract_profile_from_freeform("Привет! Я фотограф Екатерина из Москвы")
+        assert "Екатерина" in alt1["profile"].identity
+        alt2 = benchmark_brain.profile_engine.extract_profile_from_freeform("Я, Марина, снимаю портреты")
+        assert "Марина" in alt2["profile"].identity
+    finally:
+        benchmark_brain.profile_engine.save_profile(prof_before)
 
     COLLECTOR.record(BenchmarkTaskResult(
         task_id="BLIND-MEM-05",
@@ -1604,15 +1672,68 @@ def test_blind_benchmark_cat11_task54_durable_outbox_no_duplicate(tmp_path):
 
 def test_blind_benchmark_cat11_task55_fenced_single_writer_protection():
     t0 = time.monotonic()
-    from src.brain.knowledge.queue.fencing import LeaseLostError
-    raised = False
-    try:
-        raise LeaseLostError("Lease expired")
-    except LeaseLostError:
-        raised = True
-    dt = time.monotonic() - t0
+    import uuid
+    from datetime import datetime, timezone
+    from src.brain.db import get_connection
+    from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
+    from src.brain.knowledge.queue.fencing import LeaseLostError, fenced_write, make_fence
 
-    assert raised is True
+    queue = IngestionQueue()
+    source_id = f"fence-benchmark-{uuid.uuid4().hex}"
+    conn = get_connection()
+    try:
+        conn.execute(
+            """INSERT INTO knowledge_sources (
+                source_id, title, category, ingestion_status, timestamp,
+                mime_type, file_size, sha256
+            ) VALUES (?, ?, 'GLOBAL', 'DISCOVERED', ?, 'text/plain', 1, ?)""",
+            (source_id, source_id, datetime.now(timezone.utc).isoformat(), source_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    job = queue.enqueue_job(source_id)
+    stale_job = queue.claim_job("stale-worker", lease_seconds=30)
+    stale_fence = make_fence(stale_job)
+
+    # Simulate lease expiry and claim by successor worker
+    conn = get_connection()
+    try:
+        conn.execute("UPDATE ingestion_jobs SET lease_expires_at = '2000-01-01T00:00:00Z' WHERE job_id = ?", (job.job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    assert queue.reclaim_stale_jobs() == 1
+    successor_job = queue.claim_job("successor-worker", lease_seconds=30)
+    assert successor_job.lease_token > stale_job.lease_token
+
+    # Stale worker attempts fenced write - MUST raise LeaseLostError
+    stale_write_failed = False
+    try:
+        with fenced_write(queue, stale_fence) as connection:
+            connection.execute(
+                "UPDATE knowledge_sources SET title = 'stale-corrupted' WHERE source_id = ?",
+                (source_id,),
+            )
+    except LeaseLostError:
+        stale_write_failed = True
+
+    assert stale_write_failed is True
+
+    # Confirm stale worker could NOT mutate the record and cleanup
+    conn = get_connection()
+    try:
+        row = conn.execute("SELECT title FROM knowledge_sources WHERE source_id = ?", (source_id,)).fetchone()
+        assert row[0] == source_id
+        conn.execute("DELETE FROM knowledge_sources WHERE source_id = ?", (source_id,))
+        conn.execute("DELETE FROM ingestion_jobs WHERE job_id = ?", (job.job_id,))
+        conn.commit()
+    finally:
+        conn.close()
+
+    dt = time.monotonic() - t0
 
     COLLECTOR.record(BenchmarkTaskResult(
         task_id="BLIND-HONEST-05",

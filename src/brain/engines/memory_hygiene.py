@@ -12,6 +12,7 @@ DERIVED = "derived"
 _OWNER_SOURCES = {
     OWNER, VOICE, ONBOARDING, PROFILE, "owner", "user",
     "user_statement", "unit_test", "test", "chat_admission",
+    "shoot_debrief",
 }
 SOURCE_LABELS = {
     OWNER: "сказала сама",
@@ -204,8 +205,7 @@ def detect_value_conflict(new_content: str, old_content: str) -> Optional[str]:
 
 
 def is_owner_source(source: Optional[str]) -> bool:
-    s = (source or OWNER).strip().lower()
-    return s in _OWNER_SOURCES or s.startswith("user") or "test" in s
+    return (source or OWNER).strip().lower() in _OWNER_SOURCES
 
 
 def source_label(source: Optional[str]) -> str:

@@ -259,8 +259,11 @@ class ProfileEngine:
         if not extracted_data.get("identity"):
             m_name = re.search(r"меня зовут\s+([А-ЯЁA-Z][а-яёa-z]+(?:\s+[А-ЯЁA-Z][а-яёa-z]+)?)", text, re.IGNORECASE)
             if not m_name:
-                m_name = re.search(r"(?:\b[яЯ]\s*[—–-]\s*|\b[яЯ]\s+)([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)", text)
-            if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий"]:
+                m_name = re.search(
+                    r"(?:\b[яЯ]\s*[,—–-]?\s*)(?:(?:свадебный|семейный|портретный|fashion|коммерческий|начинающий|опытный)?\s*фотограф\s+)?([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+)?)",
+                    text
+                )
+            if m_name and m_name.group(1).lower() not in ["фотограф", "снимаю", "из", "в", "начинающий", "коммерческий", "свадебный", "семейный"]:
                 extracted_data["identity"] = m_name.group(1).strip()
         if not extracted_data.get("city"):
             m_city = re.search(r"(?:в|из|город(?:е)?)\s+([А-ЯЁ][а-яё]+(?:-[А-ЯЁ][а-яё]+)?)", text)
@@ -275,6 +278,8 @@ class ProfileEngine:
                     extracted_data["city"] = "Самара"
                 elif "казан" in c_low:
                     extracted_data["city"] = "Казань"
+                elif "нижн" in c_low:
+                    extracted_data["city"] = "Нижний Новгород"
                 elif "новосибирск" in c_low:
                     extracted_data["city"] = "Новосибирск"
                 elif "екатеринбург" in c_low:
@@ -287,6 +292,12 @@ class ProfileEngine:
             m_niche = re.search(r"(?:снимаю|ниша|специализаци[яи]|фотографирую)\s+([^.,;\n]+)", text, re.IGNORECASE)
             if m_niche:
                 extracted_data["niche"] = m_niche.group(1).strip()
+        if not extracted_data.get("pricing"):
+            m_price = re.search(r"(?:чек|прайс|цена|стоимость)\s*(?:от)?\s*(\d[\d\s\u00a0]*)\s*(?:руб|₽|k|к)?", text, re.IGNORECASE)
+            if m_price:
+                raw_p = re.sub(r"[\s\u00a0]", "", m_price.group(1))
+                if raw_p.isdigit() and int(raw_p) >= 500:
+                    extracted_data["pricing"] = {"Базовый": f"{m_price.group(1).strip()} руб"}
 
         current = self.get_profile()
         # The extraction prompt never returns visual, content, sales or brand
