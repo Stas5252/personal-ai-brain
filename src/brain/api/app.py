@@ -13,7 +13,7 @@ from src.brain.api.ratelimit import RateLimiter, client_key
 from src.brain.api.security import verify_brain_api_key
 from src.brain.channels.runtime_state import confined_file, process_request
 from src.brain.config import (
-    ALLOWED_EXTENSIONS, DATA_DIR, GEMINI_API_KEY, MAX_FILE_SIZE_BYTES,
+    ALLOWED_EXTENSIONS, DATA_DIR, MAX_FILE_SIZE_BYTES,
     RATE_LIMIT_ENABLED, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW_SECONDS,
 )
 
@@ -55,19 +55,10 @@ def health():
 
 @app.get("/health/ready")
 def ready():
-    from src.brain.db import get_connection
-    try:
-        db = get_connection()
-        try:
-            db.execute("SELECT 1")
-        finally:
-            db.close()
-        storage = UPLOAD_ROOT.is_dir()
-        configured = bool(GEMINI_API_KEY)
-        service_ready = storage and configured
-        return JSONResponse({"status": "ready" if service_ready else "degraded", "database": True, "storage": storage, "model_key_configured": configured, "model_live_check": "not_run"}, status_code=200 if service_ready else 503)
-    except Exception:
-        return JSONResponse({"status": "degraded", "database": False}, status_code=503)
+    from src.brain.health import readiness_report
+
+    payload, is_ready = readiness_report()
+    return JSONResponse(payload, status_code=200 if is_ready else 503)
 
 
 @app.get("/health/knowledge")
