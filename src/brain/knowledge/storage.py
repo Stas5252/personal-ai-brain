@@ -220,7 +220,8 @@ class StorageManager:
     def store_original(self, file_path: Path, sha256: str, safe_name: str) -> Path:
         prefix = self.originals_dir / sha256[:2] / sha256[2:4]
         prefix.mkdir(parents=True, exist_ok=True)
-        destination = prefix / f"{sha256}_{safe_name}"
+        filename = safe_name if safe_name.startswith(f"{sha256}_") else f"{sha256}_{safe_name}"
+        destination = prefix / filename
         if not destination.exists():
             try:
                 os.link(file_path, destination)

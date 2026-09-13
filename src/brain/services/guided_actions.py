@@ -77,7 +77,10 @@ class GuidedActionService:
 
     @staticmethod
     def _format(value):
-        if isinstance(value, dict): return "\n\n".join(f"**{str(k).replace('_',' ').capitalize()}**\n{GuidedActionService._format(v)}" for k,v in value.items())
+        if isinstance(value, dict):
+            if list(value.keys()) == ["result"]:
+                return str(value["result"])
+            return "\n\n".join(f"**{str(k).replace('_',' ').capitalize()}**\n{GuidedActionService._format(v)}" for k,v in value.items())
         if isinstance(value, list): return "\n".join(f"• {GuidedActionService._format(x)}" for x in value)
         return str(value)
 
