@@ -92,10 +92,10 @@ class LLMProvider:
                     total_dt += dt
                     err_body = e.read().decode("utf-8")
                     last_err = f"HTTP {e.code} on {m}: {err_body[:150]}"
-                    if e.code == 429:
-                        # Rapid recovery on rate limit: retry once or switch to next model immediately
-                        if attempt == 0:
-                            time.sleep(1.0)
+                    if e.code in (429, 500, 502, 503, 504):
+                        # Rapid recovery on rate limit or temporary upstream capacity spike
+                        if attempt < max_retries_per_model:
+                            time.sleep(1.5 * (attempt + 1))
                             continue
                         else:
                             break
