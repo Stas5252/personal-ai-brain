@@ -1,4 +1,4 @@
-"""Offline-safe liveness details for production readiness probes."""
+"""Offline-safe liveness details and metrics for production probes."""
 from __future__ import annotations
 
 import json
@@ -30,11 +30,7 @@ def _expected_embedding_spec() -> dict[str, Any]:
         name, dimension = f"gemini_{model}", 768
     else:
         raise RuntimeError(f"Unsupported embedding provider: {provider!r}")
-    return {
-        "schema_version": SPEC_SCHEMA_VERSION,
-        "provider": name,
-        "dimension": dimension,
-    }
+    return {"schema_version": SPEC_SCHEMA_VERSION, "provider": name, "dimension": dimension}
 
 
 def check_database() -> dict[str, Any]:
@@ -89,14 +85,11 @@ def check_core_knowledge() -> dict[str, Any]:
         rows = connection.execute(
             """
             SELECT s.source_id, s.ingestion_status,
-                   (SELECT count(*) FROM knowledge_chunks c
-                    WHERE c.source_id = s.source_id) AS chunk_count,
-                   (SELECT count(*) FROM ingestion_jobs j
-                    WHERE j.source_id = s.source_id
-                      AND j.status NOT IN ('COMPLETED','FAILED','SKIPPED','DUPLICATE'))
-                      AS active_jobs,
-                   (SELECT count(*) FROM ingestion_jobs j
-                    WHERE j.source_id = s.source_id AND j.status = 'FAILED') AS failed_jobs
+                   (SELECT count(*) FROM knowledge_chunks c WHERE c.source_id = s.source_id) AS chunk_count,
+                   (SELECT count(*) FROM ingestion_jobs j WHERE j.source_id = s.source_id
+                    AND j.status NOT IN ('COMPLETED','FAILED','SKIPPED','DUPLICATE')) AS active_jobs,
+                   (SELECT count(*) FROM ingestion_jobs j WHERE j.source_id = s.source_id
+                    AND j.status = 'FAILED') AS failed_jobs
             FROM knowledge_sources s
             WHERE json_valid(s.metadata_json)
               AND json_extract(s.metadata_json, '$.authority_tier') = 'core'
@@ -106,21 +99,12 @@ def check_core_knowledge() -> dict[str, Any]:
         connection.close()
     if len(rows) < CORE_SOURCE_MINIMUM:
         raise RuntimeError("Verified core knowledge is incomplete")
-    unhealthy = [
-        row["source_id"]
-        for row in rows
-        if row["ingestion_status"] != "COMPLETED"
-        or int(row["chunk_count"]) <= 0
-        or int(row["active_jobs"]) > 0
-        or int(row["failed_jobs"]) > 0
-    ]
+    unhealthy = [row["source_id"] for row in rows if row["ingestion_status"] != "COMPLETED"
+                 or int(row["chunk_count"]) <= 0 or int(row["active_jobs"]) > 0
+                 or int(row["failed_jobs"]) > 0]
     if unhealthy:
         raise RuntimeError("Verified core knowledge has unsettled or failed jobs")
-    return {
-        "ok": True,
-        "sources": len(rows),
-        "chunks": sum(int(row["chunk_count"]) for row in rows),
-    }
+    return {"ok": True, "sources": len(rows), "chunks": sum(int(row["chunk_count"]) for row in rows)}
 
 
 def check_worker_heartbeat(now: datetime | None = None) -> dict[str, Any]:
@@ -147,13 +131,9 @@ def check_worker_heartbeat(now: datetime | None = None) -> dict[str, Any]:
 
 
 def readiness_report() -> tuple[dict[str, Any], bool]:
-    checks = {
-        "database": check_database,
-        "storage": check_storage,
-        "vector_store": check_vector_store,
-        "core_knowledge": check_core_knowledge,
-        "worker": check_worker_heartbeat,
-    }
+    checks = {"database": check_database, "storage": check_storage,
+              "vector_store": check_vector_store, "core_knowledge": check_core_knowledge,
+              "worker": check_worker_heartbeat}
     components: dict[str, Any] = {}
     ready = bool(config.GEMINI_API_KEY)
     for name, check in checks.items():
@@ -162,9 +142,41 @@ def readiness_report() -> tuple[dict[str, Any], bool]:
         except Exception as exc:
             components[name] = {"ok": False, "error": str(exc)}
             ready = False
-    return {
-        "status": "ready" if ready else "degraded",
-        "components": components,
-        "model_key_configured": bool(config.GEMINI_API_KEY),
-        "model_live_check": "not_run",
-    }, ready
+    return {"status": "ready" if ready else "degraded", "components": components,
+            "model_key_configured": bool(config.GEMINI_API_KEY), "model_live_check": "not_run"}, ready
+
+
+def metrics_text() -> str:
+    """Return low-cardinality Prometheus metrics without external provider calls."""
+    from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
+
+    report, ready = readiness_report()
+    components = report["components"]
+    lines = [
+        "# HELP brain_ready Whether all offline readiness checks pass.",
+        "# TYPE brain_ready gauge",
+        f"brain_ready {int(ready)}",
+    ]
+    for name in ("database", "storage", "vector_store", "core_knowledge", "worker"):
+        lines.extend([
+            f"# HELP brain_component_up Offline readiness for {name}.",
+            "# TYPE brain_component_up gauge",
+            f'brain_component_up{{component="{name}"}} {int(bool(components.get(name, {}).get("ok")))}',
+        ])
+    vector_count = int(components.get("vector_store", {}).get("vectors", 0) or 0)
+    core_sources = int(components.get("core_knowledge", {}).get("sources", 0) or 0)
+    core_chunks = int(components.get("core_knowledge", {}).get("chunks", 0) or 0)
+    lines.extend([
+        "# TYPE brain_knowledge_vectors gauge", f"brain_knowledge_vectors {vector_count}",
+        "# TYPE brain_core_sources gauge", f"brain_core_sources {core_sources}",
+        "# TYPE brain_core_chunks gauge", f"brain_core_chunks {core_chunks}",
+    ])
+    try:
+        queue_stats = IngestionQueue().get_stats()
+    except Exception:
+        queue_stats = {}
+    for key in sorted(queue_stats):
+        value = queue_stats[key]
+        if isinstance(value, (int, float)):
+            lines.append(f"brain_ingestion_{key} {value}")
+    return "\n".join(lines) + "\n"

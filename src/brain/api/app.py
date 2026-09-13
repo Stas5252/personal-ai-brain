@@ -6,7 +6,7 @@ import uuid
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
 
 from src.brain.api.ratelimit import RateLimiter, client_key
@@ -21,7 +21,7 @@ log = logging.getLogger(__name__)
 app = FastAPI(title="Personal AI Brain", version="2.2.0", docs_url=None, redoc_url=None, openapi_url=None)
 UPLOAD_ROOT = DATA_DIR / "uploads"
 UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
-RATE_LIMIT_EXEMPT_PATHS = {"/health", "/health/ready", "/health/live"}
+RATE_LIMIT_EXEMPT_PATHS = {"/health", "/health/ready", "/health/live", "/metrics"}
 _limiter = RateLimiter(capacity=RATE_LIMIT_REQUESTS, window_seconds=RATE_LIMIT_WINDOW_SECONDS)
 
 
@@ -59,6 +59,13 @@ def ready():
 
     payload, is_ready = readiness_report()
     return JSONResponse(payload, status_code=200 if is_ready else 503)
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+def metrics():
+    from src.brain.health import metrics_text
+
+    return metrics_text()
 
 
 @app.get("/health/knowledge")
