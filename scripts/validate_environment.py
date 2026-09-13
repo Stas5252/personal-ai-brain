@@ -14,7 +14,7 @@ PLACEHOLDER_PREFIXES = (
     "replace_with",
     "your_",
 )
-SUPPORTED_SERVICES = {"api", "telegram", "worker"}
+SUPPORTED_SERVICES = {"api", "telegram", "worker", "migrate", "bootstrap"}
 
 
 def _unsafe_secret(value: str, minimum: int = 32) -> bool:
@@ -32,7 +32,7 @@ def collect_errors(service: str, env: Mapping[str, str] | None = None) -> list[s
 
     if _unsafe_secret(api_key):
         errors.append("BRAIN_API_KEY must be a random secret of at least 32 characters")
-    if service in SUPPORTED_SERVICES and not gemini_key:
+    if service in {"api", "telegram", "worker"} and not gemini_key:
         errors.append("GEMINI_API_KEY is required for live AI responses")
     if service == "telegram":
         if len(telegram_token) < 20:
