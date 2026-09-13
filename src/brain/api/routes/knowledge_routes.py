@@ -1,7 +1,9 @@
 """Knowledge API: producers register durable jobs; only the worker ingests."""
 from __future__ import annotations
 
+import fcntl
 import json
+import os
 import shutil
 import uuid
 from pathlib import Path
@@ -157,7 +159,26 @@ def retry_failed_source(source_id: str):
 
 @router.delete("/sources/{source_id}")
 def delete_source(source_id: str):
-    raise HTTPException(409, "Online deletion is disabled while single-writer ingestion is enabled.")
+    """Delete only while the production ingestion writer lock is available."""
+    lock_path = Path(os.environ.get(
+        "BRAIN_INGESTION_WRITER_LOCK", str(DATA_DIR / ".ingestion-writer.lock")
+    ))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise HTTPException(409, "Knowledge writer is active; retry deletion later.")
+        connection = get_connection()
+        try:
+            row = connection.execute("SELECT 1 FROM knowledge_sources WHERE source_id=?", (source_id,)).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            raise HTTPException(404, "Knowledge source not found")
+        from src.brain.knowledge.factory import KnowledgeIngestionFactory
+        KnowledgeIngestionFactory().delete_source(source_id)
+    return {"status": "deleted", "source_id": source_id}
 
 
 @router.get("/sources/{source_id}/status")

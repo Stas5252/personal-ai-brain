@@ -5,6 +5,14 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.brain.api.app import app
+from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
+
+
+@pytest.fixture(autouse=True)
+def isolated_queue():
+    IngestionQueue().clear()
+    yield
+    IngestionQueue().clear()
 
 
 @pytest.fixture
@@ -28,10 +36,8 @@ def test_api_knowledge_stats(client):
 
 def test_text_registration_returns_canonical_job_contract(client):
     response = client.post("/knowledge/sources", data={
-        "title": "API Test Rules",
-        "content": "# Правила\n\nСменная обувь обязательна.",
-        "layer": "professional",
-        "author": "Manager",
+        "title": "API Test Rules", "content": "# Правила\n\nСменная обувь обязательна.",
+        "layer": "professional", "author": "Manager",
     })
     assert response.status_code == 202
     body = response.json()
@@ -59,8 +65,3 @@ def test_duplicate_registration_reuses_active_job(client):
     assert second.json()["job_id"] == first.json()["job_id"]
     assert second.json()["source_id"] == first.json()["source_id"]
     assert second.json()["duplicate"] is True
-
-
-def test_online_delete_is_not_a_second_materialization_writer(client):
-    response = client.delete("/knowledge/sources/does-not-matter")
-    assert response.status_code == 409

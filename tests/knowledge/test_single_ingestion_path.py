@@ -4,10 +4,20 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+import pytest
+
 from src.brain.db import get_connection
+from src.brain.knowledge.queue.ingestion_queue import IngestionQueue
 from src.brain.knowledge.registration import IngestionRegistrar, job_status
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(autouse=True)
+def isolated_queue():
+    IngestionQueue().clear()
+    yield
+    IngestionQueue().clear()
 
 
 def test_atomic_registration_creates_one_source_and_one_active_job(tmp_path):
@@ -32,12 +42,8 @@ def test_registration_rolls_back_source_when_job_insert_fails(tmp_path, monkeypa
     document.write_text("# Rollback\n\nThe database operation is indivisible.", encoding="utf-8")
     registrar = IngestionRegistrar()
     monkeypatch.setattr(registrar, "_insert_job", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("boom")))
-    try:
+    with pytest.raises(RuntimeError, match="boom"):
         registrar.register_file(document, original_filename=document.name)
-    except RuntimeError as exc:
-        assert str(exc) == "boom"
-    else:
-        raise AssertionError("registration unexpectedly succeeded")
     connection = get_connection()
     try:
         assert connection.execute("SELECT COUNT(*) FROM knowledge_sources WHERE title='Rollback'").fetchone()[0] == 0
@@ -66,11 +72,9 @@ def _calls_named(path: Path, attribute: str):
 
 def test_production_producers_never_call_ingest_file():
     producers = [
-        ROOT / "src/brain/api/app.py",
-        ROOT / "src/brain/api/routes/knowledge_routes.py",
+        ROOT / "src/brain/api/app.py", ROOT / "src/brain/api/routes/knowledge_routes.py",
         ROOT / "src/brain/channels/telegram_production_ingestion.py",
-        ROOT / "scripts/seed_vetted_knowledge.py",
-        ROOT / "scripts/ingest_course_corpus.py",
+        ROOT / "scripts/seed_vetted_knowledge.py", ROOT / "scripts/ingest_course_corpus.py",
     ]
     offenders = [str(path.relative_to(ROOT)) for path in producers if _calls_named(path, "ingest_file")]
     assert offenders == []
