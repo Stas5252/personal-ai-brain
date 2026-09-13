@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Build and atomically swap a complete Chroma vector index.
 
-The command must run with API and worker stopped. It never mutates SQLite
-knowledge rows and leaves the previous vector directory as a rollback target.
+The command must run with API and worker stopped. It acquires the same lifetime
+writer lock as the worker, never mutates SQLite knowledge rows, and leaves the
+previous vector directory as a rollback target.
 """
 from __future__ import annotations
 
@@ -13,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -35,6 +37,18 @@ def _write_json(path: Path, payload: dict) -> None:
     temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
     os.replace(temporary, path)
+
+
+@contextmanager
+def _writer_lock(data_dir: Path):
+    lock_path = Path(os.environ.get("BRAIN_INGESTION_WRITER_LOCK", str(data_dir / ".ingestion-writer.lock")))
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+") as handle:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("Another ingestion writer owns the lock; stop it before reindex") from exc
+        yield
 
 
 def _assert_worker_stopped(data_dir: Path, max_age_seconds: int = 60) -> None:
@@ -83,11 +97,8 @@ def _current_summary(vector_dir: Path) -> dict:
 def plan() -> int:
     from src.brain.config import DATA_DIR, VECTOR_DB_DIR
 
-    payload = {
-        "database_chunks": _database_chunk_count(),
-        "current": _current_summary(Path(VECTOR_DB_DIR)),
-        "worker_heartbeat": str(Path(DATA_DIR) / ".knowledge-worker-heartbeat.json"),
-    }
+    payload = {"database_chunks": _database_chunk_count(), "current": _current_summary(Path(VECTOR_DB_DIR)),
+               "worker_heartbeat": str(Path(DATA_DIR) / ".knowledge-worker-heartbeat.json")}
     print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 
@@ -100,14 +111,13 @@ def _build_staging(staging: Path, batch_size: int) -> int:
     provider = get_embedding_provider()
     index = ChromaVectorIndex(vector_dir=staging, embedding_provider=provider)
     connection = get_connection()
-    offset = 0
-    total = 0
+    offset = total = 0
     try:
         while True:
             rows = connection.execute(
-                """SELECT id, source_id, layer, content, content_type,
-                          page_number, slide_number, sheet_name, start_time,
-                          end_time, heading_path, metadata_json, created_at
+                """SELECT id, source_id, layer, content, content_type, page_number,
+                          slide_number, sheet_name, start_time, end_time, heading_path,
+                          metadata_json, created_at
                    FROM knowledge_chunks ORDER BY id LIMIT ? OFFSET ?""",
                 (batch_size, offset),
             ).fetchall()
@@ -121,27 +131,20 @@ def _build_staging(staging: Path, batch_size: int) -> int:
                     source_metadata = json.loads(row["metadata_json"] or "{}")
                 except (TypeError, ValueError):
                     source_metadata = {}
-                metadatas.append(
-                    {
-                        "source_id": row["source_id"],
-                        "layer": row["layer"],
-                        "content_type": row["content_type"] or "text",
-                        "page_number": row["page_number"] if row["page_number"] is not None else -1,
-                        "slide_number": row["slide_number"] if row["slide_number"] is not None else -1,
-                        "sheet_name": row["sheet_name"] or "",
-                        "start_time": row["start_time"] if row["start_time"] is not None else -1.0,
-                        "end_time": row["end_time"] if row["end_time"] is not None else -1.0,
-                        "heading_path": row["heading_path"] or "",
-                        "title": str(source_metadata.get("title") or row["source_id"]),
-                        "created_at": row["created_at"],
-                    }
-                )
-            index.collection.upsert(
-                ids=[row["id"] for row in rows],
-                documents=documents,
-                embeddings=embeddings,
-                metadatas=metadatas,
-            )
+                metadatas.append({
+                    "source_id": row["source_id"], "layer": row["layer"],
+                    "content_type": row["content_type"] or "text",
+                    "page_number": row["page_number"] if row["page_number"] is not None else -1,
+                    "slide_number": row["slide_number"] if row["slide_number"] is not None else -1,
+                    "sheet_name": row["sheet_name"] or "",
+                    "start_time": row["start_time"] if row["start_time"] is not None else -1.0,
+                    "end_time": row["end_time"] if row["end_time"] is not None else -1.0,
+                    "heading_path": row["heading_path"] or "",
+                    "title": str(source_metadata.get("title") or row["source_id"]),
+                    "created_at": row["created_at"],
+                })
+            index.collection.upsert(ids=[row["id"] for row in rows], documents=documents,
+                                    embeddings=embeddings, metadatas=metadatas)
             total += len(rows)
             offset += len(rows)
             print(f"Indexed {total} chunks", file=sys.stderr)
@@ -155,13 +158,7 @@ def _build_staging(staging: Path, batch_size: int) -> int:
     return total
 
 
-def apply(confirm: str, batch_size: int) -> int:
-    if confirm != "REINDEX":
-        raise RuntimeError("Refusing reindex without --confirm REINDEX")
-    from src.brain.config import DATA_DIR, VECTOR_DB_DIR
-
-    data_dir = Path(DATA_DIR)
-    vector_dir = Path(VECTOR_DB_DIR)
+def _apply_locked(data_dir: Path, vector_dir: Path, batch_size: int) -> int:
     _assert_worker_stopped(data_dir)
     expected = _database_chunk_count()
     if expected <= 0:
@@ -171,15 +168,10 @@ def apply(confirm: str, batch_size: int) -> int:
     backup = vector_dir.with_name(f"{vector_dir.name}.backup-{stamp}")
     if staging.exists() or backup.exists():
         raise RuntimeError("Reindex staging or backup path already exists")
-    manifest = {
-        "operation": "vector_reindex",
-        "status": "building",
-        "started_at": datetime.now(timezone.utc).isoformat(),
-        "current_path": str(vector_dir),
-        "staging_path": str(staging),
-        "backup_path": str(backup),
-        "database_chunks": expected,
-    }
+    manifest = {"operation": "vector_reindex", "status": "building",
+                "started_at": datetime.now(timezone.utc).isoformat(),
+                "current_path": str(vector_dir), "staging_path": str(staging),
+                "backup_path": str(backup), "database_chunks": expected}
     _write_json(_manifest_path(data_dir), manifest)
     try:
         actual = _build_staging(staging, batch_size)
@@ -193,12 +185,8 @@ def apply(confirm: str, batch_size: int) -> int:
             if backup.exists() and not vector_dir.exists():
                 os.replace(backup, vector_dir)
             raise
-        manifest.update(
-            status="completed",
-            completed_at=datetime.now(timezone.utc).isoformat(),
-            vectors=actual,
-            new=_current_summary(vector_dir),
-        )
+        manifest.update(status="completed", completed_at=datetime.now(timezone.utc).isoformat(),
+                        vectors=actual, new=_current_summary(vector_dir))
         _write_json(_manifest_path(data_dir), manifest)
         print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
         return 0
@@ -209,13 +197,17 @@ def apply(confirm: str, batch_size: int) -> int:
         raise
 
 
-def rollback(confirm: str) -> int:
-    if confirm != "ROLLBACK":
-        raise RuntimeError("Refusing rollback without --confirm ROLLBACK")
+def apply(confirm: str, batch_size: int) -> int:
+    if confirm != "REINDEX":
+        raise RuntimeError("Refusing reindex without --confirm REINDEX")
     from src.brain.config import DATA_DIR, VECTOR_DB_DIR
 
     data_dir = Path(DATA_DIR)
-    vector_dir = Path(VECTOR_DB_DIR)
+    with _writer_lock(data_dir):
+        return _apply_locked(data_dir, Path(VECTOR_DB_DIR), batch_size)
+
+
+def _rollback_locked(data_dir: Path, vector_dir: Path) -> int:
     _assert_worker_stopped(data_dir)
     manifest_path = _manifest_path(data_dir)
     if not manifest_path.is_file():
@@ -235,15 +227,21 @@ def rollback(confirm: str) -> int:
         if quarantine.exists() and not vector_dir.exists():
             os.replace(quarantine, vector_dir)
         raise
-    manifest.update(
-        status="rolled_back",
-        rolled_back_at=datetime.now(timezone.utc).isoformat(),
-        quarantined_path=str(quarantine),
-        restored=_current_summary(vector_dir),
-    )
+    manifest.update(status="rolled_back", rolled_back_at=datetime.now(timezone.utc).isoformat(),
+                    quarantined_path=str(quarantine), restored=_current_summary(vector_dir))
     _write_json(manifest_path, manifest)
     print(json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
+
+
+def rollback(confirm: str) -> int:
+    if confirm != "ROLLBACK":
+        raise RuntimeError("Refusing rollback without --confirm ROLLBACK")
+    from src.brain.config import DATA_DIR, VECTOR_DB_DIR
+
+    data_dir = Path(DATA_DIR)
+    with _writer_lock(data_dir):
+        return _rollback_locked(data_dir, Path(VECTOR_DB_DIR))
 
 
 def main(argv: list[str] | None = None) -> int:
