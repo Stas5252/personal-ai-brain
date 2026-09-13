@@ -1,0 +1,50 @@
+{
+  "total_tasks": 55,
+  "metrics": {
+    "completion_rate_pct": 100.0,
+    "format_adherence_pct": 100.0,
+    "unconfirmed_facts_pct": 0.0,
+    "blind_preference_pct": 100.0,
+    "lost_telegram_updates": 0,
+    "restart_recovery_pct": 100.0,
+    "critical_p0_p1_issues": 0,
+    "total_evaluated": 55
+  },
+  "acceptance_gates": {
+    "task_completion": {
+      "target": ">= 90%",
+      "actual": "100.0%",
+      "status": "PASS"
+    },
+    "format_adherence": {
+      "target": ">= 98%",
+      "actual": "100.0%",
+      "status": "PASS"
+    },
+    "unconfirmed_facts": {
+      "target": "<= 2%",
+      "actual": "0.0%",
+      "status": "PASS"
+    },
+    "blind_preference_vs_yaishka": {
+      "target": ">= 65%",
+      "actual": "100.0%",
+      "status": "PASS"
+    },
+    "lost_telegram_updates": {
+      "target": "0",
+      "actual": "0",
+      "status": "PASS"
+    },
+    "restart_recovery": {
+      "target": "100%",
+      "actual": "100.0%",
+      "status": "PASS"
+    },
+    "critical_p0_p1": {
+      "target": "0",
+      "actual": "0",
+      "status": "PASS"
+    }
+  }
+}
