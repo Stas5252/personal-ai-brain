@@ -123,7 +123,7 @@ def benchmark_brain():
     initial_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
     initial_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
     initial_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
-    initial_task_ids = {row["id"] for row in conn.execute("SELECT id FROM tasks").fetchall()}
+    initial_task_ids = {row["task_id"] for row in conn.execute("SELECT task_id FROM tasks").fetchall()}
     conn.close()
 
     yield b
@@ -133,7 +133,7 @@ def benchmark_brain():
         all_mem_ids = {row["id"] for row in conn.execute("SELECT id FROM memories").fetchall()}
         all_proj_ids = {row["id"] for row in conn.execute("SELECT id FROM projects").fetchall()}
         all_wf_ids = {row["workflow_id"] for row in conn.execute("SELECT workflow_id FROM workflows").fetchall()}
-        all_task_ids = {row["id"] for row in conn.execute("SELECT id FROM tasks").fetchall()}
+        all_task_ids = {row["task_id"] for row in conn.execute("SELECT task_id FROM tasks").fetchall()}
 
         for mid in (all_mem_ids - initial_mem_ids):
             conn.execute("DELETE FROM memories WHERE id = ?", (mid,))
@@ -142,7 +142,7 @@ def benchmark_brain():
         for wfid in (all_wf_ids - initial_wf_ids):
             conn.execute("DELETE FROM workflows WHERE workflow_id = ?", (wfid,))
         for tid in (all_task_ids - initial_task_ids):
-            conn.execute("DELETE FROM tasks WHERE id = ?", (tid,))
+            conn.execute("DELETE FROM tasks WHERE task_id = ?", (tid,))
         conn.commit()
     except Exception:
         pass
