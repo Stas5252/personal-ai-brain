@@ -49,12 +49,16 @@ jobs:
           GEMINI_API_KEY: ci-gemini-placeholder
         run: |
           python scripts/ingest_course_corpus.py --dry-run
+      - name: Real questions reach the lesson that answers them
+        run: |
+          python scripts/eval_knowledge_answers.py --min-pass 0.7 --verbose
       - name: Deterministic reliability and product acceptance
         run: |
           pytest -q \
             tests/reliability \
             tests/brain/test_corpus_pipeline.py \
             tests/brain/test_knowledge_grounding.py \
+            tests/brain/test_knowledge_sources.py \
             tests/brain/test_pricing_and_matching.py \
             tests/brain/test_yaishka_deep_capabilities.py \
             tests/brain/test_photographer_acceptance.py \
